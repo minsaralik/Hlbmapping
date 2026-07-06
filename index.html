@@ -1,0 +1,1239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>HLB Field Mapper — Satellite</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root{
+    --bg:#16211d; --bg-raised:#1e2d27; --paper:#eae6d9; --amber:#e8a23d; --amber-dim:#7a5a26;
+    --teal:#5fa895; --danger:#c0563f; --text:#eae6d9; --text-dim:#93a39a; --border:#33473d;
+    --font-display:'Space Grotesk',sans-serif; --font-mono:'JetBrains Mono',monospace;
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
+  html,body{margin:0; padding:0; height:100%; background:var(--bg); color:var(--text); font-family:var(--font-display); overscroll-behavior:none;}
+  body{display:flex; flex-direction:column; height:100vh; height:100dvh;}
+
+  header{padding:10px 14px 8px; border-bottom:1px solid var(--border); background:linear-gradient(180deg,var(--bg-raised),var(--bg)); flex-shrink:0; z-index:10; position:relative;}
+  .brand{display:flex; align-items:baseline; justify-content:space-between; gap:8px;}
+  .brand h1{font-size:15px; font-weight:700; letter-spacing:0.02em; margin:0; text-transform:uppercase;}
+  .brand h1 span{color:var(--amber);}
+  .brand .tagline{font-family:var(--font-mono); font-size:9px; color:var(--text-dim); letter-spacing:0.08em;}
+  .blockrow{display:flex; gap:6px; margin-top:8px; align-items:center;}
+  .blockrow label{font-family:var(--font-mono); font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; flex-shrink:0;}
+  .blockrow input{flex:1; background:var(--bg); border:1px solid var(--border); color:var(--amber); font-family:var(--font-mono); font-size:13px; padding:6px 8px; border-radius:3px; min-width:0;}
+  .blockrow input:focus{outline:none; border-color:var(--amber);}
+
+  .gpsbar{display:flex; gap:10px; padding:8px 14px; background:var(--bg-raised); border-bottom:1px solid var(--border); font-family:var(--font-mono); font-size:10.5px; flex-shrink:0; overflow-x:auto; white-space:nowrap; z-index:10; position:relative;}
+  .gpsbar .stat{display:flex; flex-direction:column; gap:1px; min-width:58px;}
+  .gpsbar .stat .k{color:var(--text-dim); font-size:8.5px; text-transform:uppercase; letter-spacing:0.06em;}
+  .gpsbar .stat .v{color:var(--paper); font-weight:500;}
+  .dot{width:7px; height:7px; border-radius:50%; display:inline-block; margin-right:5px; flex-shrink:0;}
+  .dot.acquiring{background:var(--amber); animation:pulse 1.2s infinite;}
+  .dot.good{background:var(--teal);}
+  .dot.poor{background:var(--danger);}
+  @keyframes pulse{0%,100%{opacity:1;} 50%{opacity:0.3;}}
+
+  .mapwrap{flex:1; position:relative; overflow:hidden; background:var(--bg);}
+  #map{width:100%; height:100%; background:var(--bg);}
+  .leaflet-container{font-family:var(--font-display); background:var(--bg);}
+
+  .mapctrls{position:absolute; right:10px; top:10px; display:flex; flex-direction:column; gap:6px; z-index:500;}
+  .mapctrls button{width:38px; height:38px; border-radius:6px; border:1px solid var(--border); background:rgba(30,45,39,0.92); color:var(--paper); font-family:var(--font-mono); font-size:16px; display:flex; align-items:center; justify-content:center;}
+  .mapctrls button.active{background:var(--amber); color:#1a1408; border-color:var(--amber);}
+  .legend-toggle{position:absolute; left:10px; top:10px; z-index:500;}
+  .legend-toggle button{background:rgba(30,45,39,0.92); border:1px solid var(--border); color:var(--text-dim); font-family:var(--font-mono); font-size:9.5px; padding:7px 10px; border-radius:6px; letter-spacing:0.04em;}
+  .legend-panel{position:absolute; left:10px; top:48px; z-index:500; background:rgba(20,30,26,0.96); border:1px solid var(--border); border-radius:6px; padding:8px 10px; font-family:var(--font-mono); font-size:9.5px; color:var(--text-dim); display:none; max-width:170px;}
+  .legend-panel.open{display:block;}
+  .legend-panel div{display:flex; align-items:center; gap:6px; margin:3px 0;}
+  .legend-panel canvas{flex-shrink:0;}
+  .mapctrls button.textbtn{width:auto; min-width:38px; padding:0 8px; font-family:var(--font-mono); font-size:9px; letter-spacing:0.03em;}
+
+  .drawbanner{position:absolute; top:0; left:0; right:0; z-index:700; background:rgba(16,24,20,0.97); border-bottom:1.5px solid var(--amber); padding:9px 10px; display:none; flex-direction:column; gap:7px;}
+  .db-label{font-family:var(--font-mono); font-size:10.5px; color:var(--amber); text-align:center; letter-spacing:0.02em;}
+  .db-actions{display:flex; gap:6px; justify-content:center; flex-wrap:wrap;}
+  .db-actions button{font-family:var(--font-mono); font-size:10px; padding:9px 13px; border-radius:6px; border:1px solid var(--border); background:var(--bg); color:var(--text);}
+  .db-actions button.primary{background:var(--amber); color:#1a1408; border-color:var(--amber); font-weight:700;}
+  .db-actions button.danger{color:var(--danger); border-color:var(--danger);}
+  .chip-row{display:flex; gap:6px; justify-content:center;}
+  .chip{font-family:var(--font-mono); font-size:9.5px; padding:6px 11px; border-radius:14px; border:1px solid var(--border); background:var(--bg); color:var(--text-dim);}
+  .chip.selected{background:var(--teal); color:#0d1a16; border-color:var(--teal); font-weight:700;}
+
+  .pulse-dot{width:16px; height:16px; border-radius:50%; background:var(--teal); border:2px solid var(--paper); box-shadow:0 0 0 rgba(95,168,149,0.5); animation:radar 2s infinite;}
+  @keyframes radar{0%{box-shadow:0 0 0 0 rgba(95,168,149,0.55);} 70%{box-shadow:0 0 0 16px rgba(95,168,149,0);} 100%{box-shadow:0 0 0 0 rgba(95,168,149,0);}}
+
+  .leaflet-popup-content-wrapper{background:var(--bg-raised); color:var(--text); border-radius:8px;}
+  .leaflet-popup-tip{background:var(--bg-raised);}
+  .popup-num{font-weight:700; font-size:14px; margin-bottom:2px;}
+  .popup-meta{font-family:var(--font-mono); font-size:10px; color:var(--text-dim); margin-bottom:8px;}
+  .popup-del{background:var(--danger); color:#fff; border:none; padding:6px 10px; border-radius:5px; font-family:var(--font-mono); font-size:10px;}
+
+  .actionbar{flex-shrink:0; padding:10px 14px calc(10px + env(safe-area-inset-bottom)); background:var(--bg-raised); border-top:1px solid var(--border); display:flex; gap:8px; z-index:10; position:relative;}
+  .btn-mark{flex:1; background:var(--amber); color:#1a1408; border:none; border-radius:8px; font-family:var(--font-display); font-weight:700; font-size:14px; padding:14px 10px; text-transform:uppercase; letter-spacing:0.03em;}
+  .btn-mark:active{background:#cf8b2e;}
+  .btn-list, .btn-export{background:var(--bg); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:14px 14px; font-family:var(--font-mono); font-size:11px;}
+  .btn-list:active, .btn-export:active{border-color:var(--amber);}
+
+  .overlay{position:fixed; inset:0; background:rgba(10,15,13,0.85); z-index:2000; display:none; align-items:flex-end; justify-content:center;}
+  .overlay.open{display:flex;}
+  .sheet{background:var(--bg-raised); width:100%; max-width:480px; border-radius:14px 14px 0 0; padding:18px 18px calc(18px + env(safe-area-inset-bottom)); max-height:85vh; overflow-y:auto; border-top:1px solid var(--border);}
+  .sheet h2{margin:0 0 4px; font-size:16px; text-transform:uppercase; letter-spacing:0.03em;}
+  .sheet .sub{font-family:var(--font-mono); font-size:10px; color:var(--text-dim); margin-bottom:14px;}
+  .symbol-grid{display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-bottom:14px;}
+  .symbol-opt{background:var(--bg); border:1.5px solid var(--border); border-radius:8px; padding:10px 6px; display:flex; flex-direction:column; align-items:center; gap:6px; color:var(--text-dim);}
+  .symbol-opt canvas{width:32px; height:32px;}
+  .symbol-opt .lbl{font-family:var(--font-mono); font-size:8.5px; text-align:center; line-height:1.3; text-transform:uppercase;}
+  .symbol-opt.selected{border-color:var(--amber); color:var(--paper); background:rgba(232,162,61,0.08);}
+  .field{margin-bottom:12px;}
+  .field label{display:block; font-family:var(--font-mono); font-size:10px; color:var(--text-dim); text-transform:uppercase; letter-spacing:0.05em; margin-bottom:5px;}
+  .field input, .field textarea{width:100%; background:var(--bg); border:1px solid var(--border); color:var(--text); font-family:var(--font-display); font-size:14px; padding:10px; border-radius:6px;}
+  .field input:focus, .field textarea:focus{outline:none; border-color:var(--amber);}
+  .sheet-actions{display:flex; gap:8px; margin-top:6px;}
+  .btn-save{flex:2; background:var(--amber); color:#1a1408; border:none; border-radius:8px; padding:13px; font-weight:700; font-family:var(--font-display); text-transform:uppercase; font-size:13px;}
+  .btn-cancel{flex:1; background:transparent; border:1px solid var(--border); color:var(--text-dim); border-radius:8px; padding:13px; font-family:var(--font-display); font-size:13px;}
+  .gps-readout{font-family:var(--font-mono); font-size:10px; color:var(--teal); margin-bottom:12px; padding:8px 10px; background:var(--bg); border-radius:6px; border:1px solid var(--border);}
+
+  .point-row{display:flex; align-items:center; gap:10px; padding:10px 0; border-bottom:1px solid var(--border);}
+  .point-row canvas{width:24px; height:24px; flex-shrink:0;}
+  .point-row .pinfo{flex:1; min-width:0;}
+  .point-row .pnum{font-weight:700; font-size:14px;}
+  .point-row .pmeta{font-family:var(--font-mono); font-size:9.5px; color:var(--text-dim); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .point-row .pdel{background:none; border:none; color:var(--danger); font-family:var(--font-mono); font-size:16px; padding:4px 8px;}
+  .empty-state{text-align:center; padding:30px 10px; color:var(--text-dim); font-family:var(--font-mono); font-size:11px;}
+
+  .toast{position:fixed; bottom:90px; left:50%; transform:translateX(-50%); background:var(--teal); color:#0d1a16; padding:9px 16px; border-radius:20px; font-family:var(--font-mono); font-size:11.5px; z-index:3000; opacity:0; pointer-events:none; transition:opacity 0.25s;}
+  .toast.show{opacity:1;}
+  .leaflet-control-attribution{background:rgba(20,30,26,0.8) !important; color:var(--text-dim) !important; font-size:8px !important;}
+  .leaflet-control-attribution a{color:var(--teal) !important;}
+
+  #printArea{display:none;}
+  @media print{
+    @page{ size: A3 portrait; margin: 10mm; }
+    body *{ visibility:hidden; }
+    #printArea, #printArea *{ visibility:visible; }
+    #printArea{ display:block !important; position:absolute; top:0; left:0; width:100%; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand"><h1>HLB <span>Field Mapper</span></h1><div class="tagline">Census 2027 &middot; Satellite Mode</div></div>
+  <div class="blockrow"><label>Block ID</label><input id="blockId" type="text" placeholder="e.g. Ward-14 / HLB-093" autocomplete="off"></div>
+</header>
+
+<div class="gpsbar">
+  <div class="stat"><span class="k"><span class="dot acquiring" id="gpsDot"></span>Status</span><span class="v" id="gpsStatus">Acquiring…</span></div>
+  <div class="stat"><span class="k">Accuracy</span><span class="v" id="gpsAcc">—</span></div>
+  <div class="stat"><span class="k">Lat</span><span class="v" id="gpsLat">—</span></div>
+  <div class="stat"><span class="k">Lng</span><span class="v" id="gpsLng">—</span></div>
+  <div class="stat"><span class="k">Marked</span><span class="v" id="gpsCount">0</span></div>
+</div>
+
+<div class="mapwrap">
+  <div id="map"></div>
+  <div class="drawbanner" id="drawBanner">
+    <div class="db-label" id="dbLabel"></div>
+    <div id="dbExtra"></div>
+    <div class="db-actions" id="dbActions"></div>
+  </div>
+  <div class="mapctrls">
+    <button id="followBtn" class="active" title="Follow my location">&#9678;</button>
+    <button id="layerBtn" title="Toggle satellite / street">&#9673;</button>
+    <button id="outlineBtn" class="textbtn" title="Create outline">OUT</button>
+    <button id="roadBtn" class="textbtn" title="Draw roads/streams">RD</button>
+    <button id="importBtn" class="textbtn" title="Import outline from image/PDF">IMG</button>
+    <button id="editBoundaryBtn" class="textbtn" title="Edit outline points">EDIT</button>
+  </div>
+  <div class="legend-toggle"><button id="legendToggle">LEGEND</button></div>
+  <div class="legend-panel" id="legendPanel"></div>
+</div>
+
+<div class="actionbar">
+  <button class="btn-list" id="openList">List</button>
+  <button class="btn-mark" id="markHere">+ Mark Building Here</button>
+  <button class="btn-export" id="openExport">Export</button>
+</div>
+
+<div class="overlay" id="markOverlay"><div class="sheet">
+  <h2>Mark this location</h2>
+  <div class="sub">Point is fixed to your current GPS position</div>
+  <div class="gps-readout" id="markGpsReadout">Waiting for fix…</div>
+  <div class="field"><label>Symbol type</label><div class="symbol-grid" id="symbolGrid"></div></div>
+  <div class="field"><label>Building / House number</label><input id="buildingNumber" type="text" placeholder="e.g. 619 or 619/1"></div>
+  <div class="field"><label>Notes (optional)</label><textarea id="buildingNote" rows="2" placeholder="e.g. owner name, landmark name"></textarea></div>
+  <div class="sheet-actions"><button class="btn-cancel" id="cancelMark">Cancel</button><button class="btn-save" id="saveMark">Save Point</button></div>
+</div></div>
+
+<div class="overlay" id="importOverlay"><div class="sheet" style="max-height:92vh;">
+  <h2 id="impTitle">Import Outline from Map Image</h2>
+  <div class="sub" id="impSub">Upload the layout map (PDF or image) you already have.</div>
+  <div id="impUploadArea">
+    <div class="field"><input type="file" id="refFileInput" accept="image/*,application/pdf"></div>
+    <div class="sub">If the PDF doesn't load, take a screenshot of the map page and upload that image instead.</div>
+  </div>
+  <div id="impImageArea" style="display:none;">
+    <div id="calibWrap" style="overflow:auto; max-height:48vh; border:1px solid var(--border); border-radius:6px; margin-bottom:10px;">
+      <div style="position:relative; display:inline-block;">
+        <img id="refImgEl" style="display:block;">
+        <svg id="calibSvg" style="position:absolute; top:0; left:0; pointer-events:none;"></svg>
+      </div>
+    </div>
+    <div class="db-actions" style="justify-content:flex-start; margin-bottom:8px;">
+      <button id="zoomInImg" type="button">+</button><button id="zoomOutImg" type="button">&minus;</button>
+    </div>
+    <div id="calibPointsList" class="sub"></div>
+  </div>
+  <div class="sheet-actions" id="impActions">
+    <button class="btn-cancel" id="impCancelBtn0">Cancel</button>
+  </div>
+</div></div>
+
+<div class="overlay" id="outlineChoiceOverlay"><div class="sheet">
+  <h2>Create Layout Map Outline</h2>
+  <div class="sub">Choose how to trace this block's boundary. This replaces any existing saved outline.</div>
+  <div class="sheet-actions" style="flex-direction:column;">
+    <button class="btn-save" id="chooseWalk" style="margin-bottom:8px;">1. Walk the Boundary</button>
+    <button class="btn-save" id="chooseCoords" style="margin-bottom:8px; background:var(--teal);">2. Mark Points on Map</button>
+    <button class="btn-cancel" id="cancelOutlineChoice">Cancel</button>
+  </div>
+</div></div>
+
+<div class="overlay" id="listOverlay"><div class="sheet">
+  <h2>Marked points</h2>
+  <div class="sub" id="listSub">0 points in this block</div>
+  <div id="pointList"></div>
+  <div class="sheet-actions"><button class="btn-cancel" id="closeList">Close</button></div>
+</div></div>
+
+<div class="overlay" id="exportOverlay"><div class="sheet">
+  <h2>Export block data</h2>
+  <div class="sub">Files download to your device</div>
+  <div class="sheet-actions" style="flex-direction:column;">
+    <button class="btn-save" id="exportCsv" style="margin-bottom:8px;">Download CSV</button>
+    <button class="btn-save" id="exportKml" style="margin-bottom:8px; background:var(--teal);">Download KML</button>
+    <button class="btn-save" id="exportPrint" style="margin-bottom:8px; background:var(--paper); color:#1a1408;">Print / Save as PDF (A3)</button>
+    <button class="btn-cancel" id="closeExport">Close</button>
+  </div>
+</div></div>
+
+<div class="toast" id="toast"></div>
+<div id="printArea"></div>
+
+<script>
+/* ================= Symbols (matches official HLB legend) ================= */
+const SYMBOLS = [
+  {id:'pucca_res',    label:'Pucca · Residential',     draw:drawSquare,   hatch:false, color:'#eae6d9'},
+  {id:'pucca_nonres', label:'Pucca · Non-residential',  draw:drawSquare,   hatch:true,  color:'#eae6d9'},
+  {id:'kutcha_res',   label:'Kutcha · Residential',     draw:drawTriangle, hatch:false, color:'#eae6d9'},
+  {id:'kutcha_nonres',label:'Kutcha · Non-residential', draw:drawTriangle, hatch:true,  color:'#eae6d9'},
+  {id:'well',         label:'Well / Handpump',          draw:drawWell,     hatch:false, color:'#eae6d9'},
+  {id:'landmark',     label:'Landmark (temple/school)', draw:drawLandmark, hatch:false, color:'#eae6d9'},
+];
+function drawSquare(ctx,cx,cy,s,hatch,color){
+  ctx.strokeStyle=color; ctx.lineWidth=Math.max(1.4,s*0.07);
+  ctx.strokeRect(cx-s/2,cy-s/2,s,s);
+  if(hatch){ ctx.save(); ctx.beginPath(); ctx.rect(cx-s/2,cy-s/2,s,s); ctx.clip();
+    ctx.beginPath(); for(let i=-s;i<=s;i+=s/4){ ctx.moveTo(cx-s/2+i,cy-s/2); ctx.lineTo(cx-s/2+i+s,cy+s/2);} ctx.strokeStyle=color; ctx.lineWidth=Math.max(0.9,s*0.04); ctx.stroke(); ctx.restore(); }
+}
+function drawTriangle(ctx,cx,cy,s,hatch,color){
+  const h=s*0.9; ctx.strokeStyle=color; ctx.lineWidth=Math.max(1.4,s*0.07);
+  ctx.beginPath(); ctx.moveTo(cx,cy-h/1.6); ctx.lineTo(cx+s/1.7,cy+h/2.2); ctx.lineTo(cx-s/1.7,cy+h/2.2); ctx.closePath(); ctx.stroke();
+  if(hatch){ ctx.save(); ctx.clip(); ctx.beginPath(); for(let i=-s;i<=s;i+=s/4){ ctx.moveTo(cx-s+i,cy-h/1.6); ctx.lineTo(cx-s+i+h,cy+h/2.2);} ctx.strokeStyle=color; ctx.lineWidth=Math.max(0.9,s*0.04); ctx.stroke(); ctx.restore(); }
+}
+function drawWell(ctx,cx,cy,s,hatch,color){
+  ctx.strokeStyle=color; ctx.lineWidth=Math.max(1.4,s*0.08);
+  ctx.beginPath(); ctx.arc(cx,cy,s/2.3,0,Math.PI*2); ctx.stroke();
+  ctx.fillStyle=color; ctx.beginPath(); ctx.arc(cx,cy,s*0.1,0,Math.PI*2); ctx.fill();
+}
+function drawLandmark(ctx,cx,cy,s,hatch,color){
+  ctx.strokeStyle=color; ctx.lineWidth=Math.max(1.4,s*0.08);
+  ctx.beginPath(); ctx.moveTo(cx,cy-s/1.8); ctx.lineTo(cx+s/1.8,cy); ctx.lineTo(cx,cy+s/1.8); ctx.lineTo(cx-s/1.8,cy); ctx.closePath(); ctx.stroke();
+}
+function symbolToDataUrl(sym, size, color){
+  const c = document.createElement('canvas'); c.width=size; c.height=size;
+  const cctx = c.getContext('2d');
+  sym.draw(cctx, size/2, size/2, size*0.75, sym.hatch, color);
+  return c.toDataURL();
+}
+
+/* ================= State ================= */
+let blockId='', points=[], currentPos=null, selectedSymbol=SYMBOLS[0].id, followMode=true, usingSatellite=true;
+let map, liveMarker, accCircle, trailLine, trailCoords=[], pointMarkers={}, warningRings={};
+let boundary={points:[], closed:false, method:null}, boundaryLayer=null;
+let roadFeatures=[], roadLayers={};
+let mode=null; // null | 'boundary-walk' | 'boundary-coords' | 'road-draw'
+let boundaryDraft=[], boundaryDraftLine=null, boundaryVertexMarkers=[], boundaryWalkTimer=null, boundaryClickHandler=null;
+let roadDraftCoords=[], roadDraftLine=null, roadSelectedKind='road', roadClickHandlerRef=null;
+
+/* ================= Local persistence (works on any real website, unlike window.storage) ================= */
+function storageGet(key){
+  try{ const v = localStorage.getItem(key); return Promise.resolve(v===null ? null : {key, value:v}); }
+  catch(e){ return Promise.reject(e); }
+}
+function storageSet(key, value){
+  try{ localStorage.setItem(key, value); return Promise.resolve({key, value}); }
+  catch(e){ return Promise.reject(e); }
+}
+function attachTapHandler(el, handler){
+  let downPos=null;
+  el.onpointerdown = (e)=>{ downPos = {x:e.clientX, y:e.clientY}; };
+  el.onpointerup = (e)=>{
+    if(!downPos) return;
+    const moved = Math.hypot(e.clientX-downPos.x, e.clientY-downPos.y);
+    downPos=null;
+    if(moved < 12) handler({offsetX:e.offsetX, offsetY:e.offsetY});
+  };
+}
+
+/* ================= Map init (free basemaps, no API key) ================= */
+const esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom:20, attribution:'Esri, Maxar, Earthstar Geographics'
+});
+const esriLabels = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom:20, attribution:''
+});
+const osmStreet = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom:19, attribution:'&copy; OpenStreetMap contributors'
+});
+
+map = L.map('map', {zoomControl:false, attributionControl:true, layers:[esriSat, esriLabels]}).setView([10.0, 76.3], 17);
+L.control.zoom({position:'bottomright'}).remove(); // custom controls used instead
+L.control.scale({position:'bottomleft', metric:true, imperial:false}).addTo(map);
+
+document.getElementById('layerBtn').onclick = ()=>{
+  usingSatellite = !usingSatellite;
+  if(usingSatellite){ map.removeLayer(osmStreet); map.addLayer(esriSat); map.addLayer(esriLabels); showToast('Satellite view'); }
+  else { map.removeLayer(esriSat); map.removeLayer(esriLabels); map.addLayer(osmStreet); showToast('Street view'); }
+};
+
+document.getElementById('followBtn').onclick = (e)=>{
+  followMode = !followMode;
+  e.currentTarget.classList.toggle('active', followMode);
+  if(followMode && currentPos) map.panTo([currentPos.lat, currentPos.lng]);
+};
+map.on('dragstart', ()=>{ followMode=false; document.getElementById('followBtn').classList.remove('active'); });
+
+/* live position icon */
+const liveIcon = L.divIcon({className:'', html:'<div class="pulse-dot"></div>', iconSize:[16,16], iconAnchor:[8,8]});
+
+/* ================= Storage ================= */
+async function loadBlock(id){
+  points=[]; clearMarkers();
+  trailCoords=[]; if(trailLine){ map.removeLayer(trailLine); trailLine=null; }
+  boundary={points:[], closed:false, method:null}; clearBoundaryLayer();
+  roadFeatures=[]; clearRoadLayers();
+  Object.values(warningRings).forEach(w=>map.removeLayer(w)); warningRings={};
+  try{
+    const res = await storageGet('hlb:'+id);
+    if(res && res.value){
+      const data = JSON.parse(res.value);
+      points = data.points || [];
+      trailCoords = data.trail || [];
+      boundary = data.boundary || {points:[], closed:false, method:null};
+      roadFeatures = data.roads || [];
+    }
+  }catch(e){}
+  points.forEach(addMarkerForPoint);
+  if(trailCoords.length>1){ trailLine = L.polyline(trailCoords,{color:'#e8a23d', weight:2, opacity:0.55}).addTo(map); }
+  renderBoundary();
+  renderAllRoads();
+  refreshInsideFlags();
+  updateGpsCount();
+  fitToPoints();
+}
+async function saveBlock(){
+  if(!blockId) return;
+  try{ await storageSet('hlb:'+blockId, JSON.stringify({points, trail:trailCoords, boundary, roads:roadFeatures})); }catch(e){ showToast('Save failed'); }
+}
+let lastSavedTrailLen = 0;
+setInterval(()=>{
+  if(blockId && trailCoords.length !== lastSavedTrailLen){
+    lastSavedTrailLen = trailCoords.length;
+    saveBlock();
+  }
+}, 15000);
+function clearMarkers(){ Object.values(pointMarkers).forEach(m=>map.removeLayer(m)); pointMarkers={}; }
+function fitToPoints(){
+  const all = points.map(p=>[p.lat,p.lng]).concat(boundary.points.map(p=>[p.lat,p.lng]));
+  if(all.length===0) return;
+  const bounds = L.latLngBounds(all);
+  map.fitBounds(bounds.pad(0.3));
+}
+
+/* ---- Boundary rendering ---- */
+function clearBoundaryLayer(){ if(boundaryLayer){ map.removeLayer(boundaryLayer); boundaryLayer=null; } }
+function renderBoundary(){
+  clearBoundaryLayer();
+  if(boundary.points.length<2) return;
+  const latlngs = boundary.points.map(p=>[p.lat,p.lng]);
+  boundaryLayer = boundary.closed
+    ? L.polygon(latlngs, {color:'#ff5a5a', weight:2.5, fillOpacity:0.04}).addTo(map)
+    : L.polyline(latlngs, {color:'#ff5a5a', weight:2.5}).addTo(map);
+}
+function pointInPolygon(lat,lng,poly){
+  let inside=false;
+  for(let i=0,j=poly.length-1;i<poly.length;j=i++){
+    const xi=poly[i].lat, yi=poly[i].lng, xj=poly[j].lat, yj=poly[j].lng;
+    const intersect = ((yi>lng)!==(yj>lng)) && (lat < (xj-xi)*(lng-yi)/(yj-yi)+xi);
+    if(intersect) inside=!inside;
+  }
+  return inside;
+}
+function refreshInsideFlags(){
+  Object.values(warningRings).forEach(w=>map.removeLayer(w)); warningRings={};
+  if(!boundary.closed || boundary.points.length<3) return;
+  points.forEach(p=>{
+    const inside = pointInPolygon(p.lat,p.lng,boundary.points);
+    if(!inside){ warningRings[p.id] = L.circleMarker([p.lat,p.lng], {radius:13, color:'#ff5a5a', weight:2, fill:false, dashArray:'3,3'}).addTo(map); }
+  });
+}
+
+/* ---- Road feature rendering ---- */
+function clearRoadLayers(){ Object.values(roadLayers).forEach(l=>map.removeLayer(l)); roadLayers={}; }
+function roadStyle(kind){
+  if(kind==='walkway') return {color:'#f2f2f2', weight:1.5, dashArray:'4,4', opacity:0.9};
+  if(kind==='stream') return {color:'#4fa8e8', weight:2.5, dashArray:'1,4', opacity:0.9};
+  return {color:'#f2f2f2', weight:3, opacity:0.9};
+}
+function renderRoadFeature(f){ roadLayers[f.id] = L.polyline(f.coords, roadStyle(f.kind)).addTo(map); }
+function renderAllRoads(){ clearRoadLayers(); roadFeatures.forEach(renderRoadFeature); }
+
+/* ---- Drawing banner helper ---- */
+function showBanner(label, actionsHtml, extraHtml){
+  document.getElementById('dbLabel').textContent = label;
+  document.getElementById('dbExtra').innerHTML = extraHtml || '';
+  document.getElementById('dbActions').innerHTML = actionsHtml;
+  document.getElementById('drawBanner').style.display='flex';
+}
+function hideBanner(){ document.getElementById('drawBanner').style.display='none'; }
+
+/* ---- Outline creation: choice ---- */
+document.getElementById('outlineBtn').onclick=()=>{
+  if(!blockId){ showToast('Enter a Block ID first'); return; }
+  document.getElementById('outlineChoiceOverlay').classList.add('open');
+};
+document.getElementById('cancelOutlineChoice').onclick=()=>document.getElementById('outlineChoiceOverlay').classList.remove('open');
+document.getElementById('chooseWalk').onclick=()=>{ document.getElementById('outlineChoiceOverlay').classList.remove('open'); startBoundaryWalk(); };
+document.getElementById('chooseCoords').onclick=()=>{ document.getElementById('outlineChoiceOverlay').classList.remove('open'); startBoundaryCoords(); };
+
+/* ---- Outline creation: walk mode ---- */
+function startBoundaryWalk(){
+  mode='boundary-walk'; boundaryDraft=[];
+  if(boundaryDraftLine){ map.removeLayer(boundaryDraftLine); boundaryDraftLine=null; }
+  showBanner('Recording outline — auto point every 10s', `
+    <button class="primary" id="bwMark">Mark Border Point</button>
+    <button id="bwFinish">Finish Outline</button>
+    <button class="danger" id="bwCancel">Cancel</button>`);
+  document.getElementById('bwMark').onclick=()=>addBoundaryDraftPoint(true);
+  document.getElementById('bwFinish').onclick=finishBoundaryWalk;
+  document.getElementById('bwCancel').onclick=cancelBoundaryDraft;
+  boundaryWalkTimer=setInterval(()=>addBoundaryDraftPoint(false),10000);
+  showToast('Walk the boundary — recording started');
+}
+function addBoundaryDraftPoint(manual){
+  if(!currentPos){ if(manual) showToast('Waiting for GPS fix…'); return; }
+  boundaryDraft.push({lat:currentPos.lat, lng:currentPos.lng, manual});
+  const latlngs = boundaryDraft.map(p=>[p.lat,p.lng]);
+  if(!boundaryDraftLine) boundaryDraftLine = L.polyline(latlngs,{color:'#3ddc6a', weight:3}).addTo(map);
+  else boundaryDraftLine.setLatLngs(latlngs);
+  if(manual) showToast('Border point marked');
+}
+function finishBoundaryWalk(){
+  clearInterval(boundaryWalkTimer); boundaryWalkTimer=null;
+  if(boundaryDraft.length<2){ showToast('Not enough points captured'); cancelBoundaryDraft(); return; }
+  const close = confirm('Close the loop by connecting the last point back to the start?');
+  boundary={points:boundaryDraft, closed:close, method:'walk'};
+  finalizeBoundary();
+}
+
+/* ---- Outline creation: map-tap mode ---- */
+function startBoundaryCoords(){
+  mode='boundary-coords'; boundaryDraft=[];
+  boundaryVertexMarkers.forEach(m=>map.removeLayer(m)); boundaryVertexMarkers=[];
+  if(boundaryDraftLine){ map.removeLayer(boundaryDraftLine); boundaryDraftLine=null; }
+  followMode=false; document.getElementById('followBtn').classList.remove('active');
+  showBanner('Tap the map to add boundary points. Tap point 1 to close the loop.', `
+    <button id="bcUndo">Undo last point</button>
+    <button class="danger" id="bcCancel">Cancel</button>`);
+  document.getElementById('bcUndo').onclick=()=>{
+    if(boundaryDraft.length){
+      boundaryDraft.pop();
+      const m=boundaryVertexMarkers.pop(); if(m) map.removeLayer(m);
+      redrawBoundaryDraftLine();
+    }
+  };
+  document.getElementById('bcCancel').onclick=cancelBoundaryDraft;
+  boundaryClickHandler=(e)=>{
+    const {lat,lng}=e.latlng;
+    if(boundaryDraft.length>=3){
+      const p1=map.latLngToContainerPoint([boundaryDraft[0].lat, boundaryDraft[0].lng]);
+      const p2=map.latLngToContainerPoint([lat,lng]);
+      if(Math.hypot(p1.x-p2.x,p1.y-p2.y) < 25){
+        boundary={points:boundaryDraft, closed:true, method:'coords'};
+        finalizeBoundary();
+        return;
+      }
+    }
+    boundaryDraft.push({lat,lng,manual:true});
+    boundaryVertexMarkers.push(L.circleMarker([lat,lng],{radius:5,color:'#3ddc6a',weight:2,fillColor:'#3ddc6a',fillOpacity:1}).addTo(map));
+    redrawBoundaryDraftLine();
+  };
+  map.on('click', boundaryClickHandler);
+}
+function redrawBoundaryDraftLine(){
+  const latlngs = boundaryDraft.map(p=>[p.lat,p.lng]);
+  if(boundaryDraftLine) map.removeLayer(boundaryDraftLine);
+  if(latlngs.length>1) boundaryDraftLine = L.polyline(latlngs,{color:'#3ddc6a', weight:3}).addTo(map);
+}
+function cancelBoundaryDraft(){
+  clearInterval(boundaryWalkTimer); boundaryWalkTimer=null;
+  if(boundaryClickHandler){ map.off('click', boundaryClickHandler); boundaryClickHandler=null; }
+  if(boundaryDraftLine){ map.removeLayer(boundaryDraftLine); boundaryDraftLine=null; }
+  boundaryVertexMarkers.forEach(m=>map.removeLayer(m)); boundaryVertexMarkers=[];
+  boundaryDraft=[]; mode=null; hideBanner();
+  showToast('Outline drawing cancelled');
+}
+function finalizeBoundary(){
+  clearInterval(boundaryWalkTimer); boundaryWalkTimer=null;
+  if(boundaryClickHandler){ map.off('click', boundaryClickHandler); boundaryClickHandler=null; }
+  if(boundaryDraftLine){ map.removeLayer(boundaryDraftLine); boundaryDraftLine=null; }
+  boundaryVertexMarkers.forEach(m=>map.removeLayer(m)); boundaryVertexMarkers=[];
+  boundaryDraft=[]; mode=null; hideBanner();
+  renderBoundary(); refreshInsideFlags(); saveBlock();
+  showToast('Outline saved');
+}
+
+/* ---- Road / stream drawing ---- */
+document.getElementById('roadBtn').onclick=()=>{
+  if(!blockId){ showToast('Enter a Block ID first'); return; }
+  startRoadDraw();
+};
+function startRoadDraw(){
+  mode='road-draw'; roadDraftCoords=[]; roadSelectedKind='road';
+  if(roadDraftLine){ map.removeLayer(roadDraftLine); roadDraftLine=null; }
+  followMode=false; document.getElementById('followBtn').classList.remove('active');
+  renderRoadBanner();
+  roadClickHandlerRef=(e)=>{ roadDraftCoords.push([e.latlng.lat,e.latlng.lng]); redrawRoadDraft(); };
+  map.on('click', roadClickHandlerRef);
+}
+function renderRoadBanner(){
+  showBanner('Tap the map to draw a line, then Finish Line.', `
+    <button id="rdUndo">Undo point</button>
+    <button class="primary" id="rdFinishLine">Finish Line</button>
+    <button class="danger" id="rdDone">Done</button>`,
+    `<div class="chip-row">
+      <button class="chip ${roadSelectedKind==='road'?'selected':''}" id="chipRoad">Road</button>
+      <button class="chip ${roadSelectedKind==='walkway'?'selected':''}" id="chipWalk">Walkway</button>
+      <button class="chip ${roadSelectedKind==='stream'?'selected':''}" id="chipStream">Stream</button>
+    </div>`);
+  document.getElementById('chipRoad').onclick=()=>{ roadSelectedKind='road'; renderRoadBanner(); redrawRoadDraft(); };
+  document.getElementById('chipWalk').onclick=()=>{ roadSelectedKind='walkway'; renderRoadBanner(); redrawRoadDraft(); };
+  document.getElementById('chipStream').onclick=()=>{ roadSelectedKind='stream'; renderRoadBanner(); redrawRoadDraft(); };
+  document.getElementById('rdUndo').onclick=()=>{ if(roadDraftCoords.length){ roadDraftCoords.pop(); redrawRoadDraft(); } };
+  document.getElementById('rdFinishLine').onclick=finishRoadLine;
+  document.getElementById('rdDone').onclick=finishRoadDrawMode;
+}
+function redrawRoadDraft(){
+  if(roadDraftLine){ map.removeLayer(roadDraftLine); roadDraftLine=null; }
+  if(roadDraftCoords.length>1) roadDraftLine = L.polyline(roadDraftCoords, roadStyle(roadSelectedKind)).addTo(map);
+}
+function finishRoadLine(){
+  if(roadDraftCoords.length<2){ showToast('Add at least 2 points first'); return; }
+  const feature={id:Date.now()+'-'+Math.random().toString(36).slice(2,6), kind:roadSelectedKind, coords:roadDraftCoords, t:new Date().toISOString()};
+  roadFeatures.push(feature); renderRoadFeature(feature);
+  if(roadDraftLine){ map.removeLayer(roadDraftLine); roadDraftLine=null; }
+  roadDraftCoords=[]; saveBlock();
+  showToast(feature.kind+' saved — draw another or tap Done');
+}
+function finishRoadDrawMode(){
+  if(roadDraftCoords.length>=2) finishRoadLine();
+  if(roadClickHandlerRef){ map.off('click', roadClickHandlerRef); roadClickHandlerRef=null; }
+  if(roadDraftLine){ map.removeLayer(roadDraftLine); roadDraftLine=null; }
+  roadDraftCoords=[]; mode=null; hideBanner();
+}
+
+/* ================= GPS ================= */
+function startGps(){
+  if(!navigator.geolocation){ document.getElementById('gpsStatus').textContent='Not supported'; return; }
+  navigator.geolocation.watchPosition(onPos, onGpsError, {enableHighAccuracy:true, maximumAge:1000, timeout:15000});
+}
+function onGpsError(err){
+  document.getElementById('gpsDot').className='dot poor';
+  document.getElementById('gpsStatus').textContent = err.code===1 ? 'Permission denied' : 'Signal lost';
+}
+let firstFix = true;
+function onPos(pos){
+  const {latitude:lat, longitude:lng, accuracy:acc} = pos.coords;
+  currentPos = {lat,lng,acc};
+  const dot=document.getElementById('gpsDot'), status=document.getElementById('gpsStatus');
+  if(acc<=8){dot.className='dot good'; status.textContent='Good fix';}
+  else if(acc<=20){dot.className='dot good'; status.textContent='Fair fix';}
+  else {dot.className='dot acquiring'; status.textContent='Weak fix';}
+  document.getElementById('gpsAcc').textContent='±'+acc.toFixed(1)+'m';
+  document.getElementById('gpsLat').textContent=lat.toFixed(6);
+  document.getElementById('gpsLng').textContent=lng.toFixed(6);
+
+  const latlng=[lat,lng];
+  if(!liveMarker){ liveMarker=L.marker(latlng,{icon:liveIcon,zIndexOffset:1000}).addTo(map); }
+  else liveMarker.setLatLng(latlng);
+  if(!accCircle){ accCircle=L.circle(latlng,{radius:acc, color:'#5fa895', weight:1, fillOpacity:0.08}).addTo(map); }
+  else { accCircle.setLatLng(latlng); accCircle.setRadius(acc); }
+
+  const last = trailCoords[trailCoords.length-1];
+  if(!last || map.distance(last, latlng) > 1.5){
+    trailCoords.push(latlng);
+    if(trailCoords.length>1000) trailCoords.shift();
+    if(!trailLine) trailLine = L.polyline(trailCoords,{color:'#e8a23d', weight:2, opacity:0.55}).addTo(map);
+    else trailLine.setLatLngs(trailCoords);
+  }
+  if(firstFix){ map.setView(latlng, 19); firstFix=false; }
+  else if(followMode){ map.panTo(latlng); }
+}
+
+function updateGpsCount(){ document.getElementById('gpsCount').textContent = points.length; }
+
+/* ================= Legend ================= */
+const legendPanel = document.getElementById('legendPanel');
+legendPanel.innerHTML = SYMBOLS.map(s=>`<div><canvas width="24" height="24" data-sym="${s.id}"></canvas>${s.label}</div>`).join('');
+document.getElementById('legendToggle').onclick=()=> legendPanel.classList.toggle('open');
+legendPanel.querySelectorAll('canvas').forEach(c=>{ const sym=SYMBOLS.find(s=>s.id===c.dataset.sym); sym.draw(c.getContext('2d'),12,12,15,sym.hatch,'#eae6d9'); });
+
+/* ================= Symbol picker ================= */
+const symbolGrid = document.getElementById('symbolGrid');
+function renderSymbolGrid(){
+  symbolGrid.innerHTML='';
+  SYMBOLS.forEach(sym=>{
+    const opt=document.createElement('div');
+    opt.className='symbol-opt'+(sym.id===selectedSymbol?' selected':'');
+    opt.innerHTML=`<canvas width="64" height="64"></canvas><div class="lbl">${sym.label}</div>`;
+    opt.onclick=()=>{ selectedSymbol=sym.id; renderSymbolGrid(); };
+    symbolGrid.appendChild(opt);
+    const c=opt.querySelector('canvas'); sym.draw(c.getContext('2d'),32,32,30,sym.hatch, sym.id===selectedSymbol?'#e8a23d':'#93a39a');
+  });
+}
+renderSymbolGrid();
+
+/* ================= Add / render point markers ================= */
+function addMarkerForPoint(pt){
+  const sym = SYMBOLS.find(s=>s.id===pt.type)||SYMBOLS[0];
+  const icon = L.icon({iconUrl: symbolToDataUrl(sym,44,'#eae6d9'), iconSize:[28,28], iconAnchor:[14,14]});
+  const m = L.marker([pt.lat,pt.lng], {icon}).addTo(map);
+  m.bindPopup(`<div class="popup-num">${pt.number}</div><div class="popup-meta">${sym.label}${pt.note?(' · '+pt.note):''}</div><button class="popup-del" data-id="${pt.id}">Delete point</button>`);
+  m.on('popupopen', (e)=>{
+    e.popup.getElement().querySelector('.popup-del').onclick = ()=>{
+      points = points.filter(p=>p.id!==pt.id);
+      map.removeLayer(m); delete pointMarkers[pt.id];
+      if(warningRings[pt.id]){ map.removeLayer(warningRings[pt.id]); delete warningRings[pt.id]; }
+      saveBlock(); updateGpsCount(); showToast('Point removed');
+    };
+  });
+  pointMarkers[pt.id]=m;
+}
+
+/* ================= Mark modal ================= */
+document.getElementById('markHere').onclick=()=>{
+  if(!blockId){ showToast('Enter a Block ID first'); return; }
+  if(!currentPos){ showToast('Waiting for GPS fix…'); return; }
+  document.getElementById('markGpsReadout').textContent = `${currentPos.lat.toFixed(6)}, ${currentPos.lng.toFixed(6)}  ·  ±${currentPos.acc.toFixed(1)}m`;
+  document.getElementById('buildingNumber').value=''; document.getElementById('buildingNote').value='';
+  document.getElementById('markOverlay').classList.add('open');
+};
+document.getElementById('cancelMark').onclick=()=>document.getElementById('markOverlay').classList.remove('open');
+document.getElementById('saveMark').onclick=()=>{
+  const number=document.getElementById('buildingNumber').value.trim();
+  if(!number){ showToast('Enter a building number'); return; }
+  const pt = {id:Date.now()+'-'+Math.random().toString(36).slice(2,7), type:selectedSymbol, number,
+    note:document.getElementById('buildingNote').value.trim(), lat:currentPos.lat, lng:currentPos.lng, acc:currentPos.acc, t:new Date().toISOString()};
+  points.push(pt); addMarkerForPoint(pt); refreshInsideFlags(); saveBlock(); updateGpsCount();
+  document.getElementById('markOverlay').classList.remove('open');
+  showToast('Point saved');
+};
+
+/* ================= List ================= */
+document.getElementById('openList').onclick=()=>{ renderList(); document.getElementById('listOverlay').classList.add('open'); };
+document.getElementById('closeList').onclick=()=>document.getElementById('listOverlay').classList.remove('open');
+function renderList(){
+  const container=document.getElementById('pointList');
+  document.getElementById('listSub').textContent = points.length+' point'+(points.length!==1?'s':'')+' in this block';
+  if(points.length===0){ container.innerHTML='<div class="empty-state">No points yet.<br>Walk to a building and tap "Mark Building Here".</div>'; return; }
+  container.innerHTML='';
+  [...points].sort((a,b)=>a.number.localeCompare(b.number,undefined,{numeric:true})).forEach(pt=>{
+    const sym=SYMBOLS.find(s=>s.id===pt.type)||SYMBOLS[0];
+    const row=document.createElement('div'); row.className='point-row';
+    row.innerHTML=`<canvas width="48" height="48"></canvas><div class="pinfo"><div class="pnum">${pt.number}</div><div class="pmeta">${sym.label} &middot; ${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}</div></div><button class="pdel">&times;</button>`;
+    sym.draw(row.querySelector('canvas').getContext('2d'),24,24,20,sym.hatch,'#eae6d9');
+    row.querySelector('.pdel').onclick=()=>{
+      points=points.filter(p=>p.id!==pt.id);
+      if(pointMarkers[pt.id]){ map.removeLayer(pointMarkers[pt.id]); delete pointMarkers[pt.id]; }
+      if(warningRings[pt.id]){ map.removeLayer(warningRings[pt.id]); delete warningRings[pt.id]; }
+      saveBlock(); updateGpsCount(); renderList(); showToast('Point removed');
+    };
+    row.addEventListener('click', (e)=>{ if(e.target.classList.contains('pdel')) return; map.panTo([pt.lat,pt.lng]); document.getElementById('listOverlay').classList.remove('open'); });
+    container.appendChild(row);
+  });
+}
+
+/* ================= Export ================= */
+document.getElementById('openExport').onclick=()=>document.getElementById('exportOverlay').classList.add('open');
+document.getElementById('closeExport').onclick=()=>document.getElementById('exportOverlay').classList.remove('open');
+function download(filename, content, mime){
+  const blob=new Blob([content],{type:mime}); const url=URL.createObjectURL(blob);
+  const a=document.createElement('a'); a.href=url; a.download=filename; a.click(); URL.revokeObjectURL(url);
+}
+document.getElementById('exportCsv').onclick=()=>{
+  if(points.length===0){ showToast('No points to export'); return; }
+  let csv='building_number,type,latitude,longitude,accuracy_m,timestamp,note\n';
+  points.forEach(p=>{ csv+=`"${p.number}","${p.type}",${p.lat},${p.lng},${p.acc||''},"${p.t}","${(p.note||'').replace(/"/g,"'")}"\n`; });
+  download((blockId||'hlb')+'_points.csv', csv, 'text/csv');
+};
+document.getElementById('exportKml').onclick=()=>{
+  if(points.length===0 && boundary.points.length===0 && roadFeatures.length===0){ showToast('No data to export'); return; }
+  let kml=`<?xml version="1.0" encoding="UTF-8"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document><name>${blockId||'HLB'}</name>`;
+  points.forEach(p=>{ const sym=SYMBOLS.find(s=>s.id===p.type); kml+=`<Placemark><name>${p.number}</name><description>${sym?sym.label:''} ${p.note?('- '+p.note):''}</description><Point><coordinates>${p.lng},${p.lat},0</coordinates></Point></Placemark>`; });
+  if(boundary.points.length>1){
+    const coordStr = boundary.points.map(p=>`${p.lng},${p.lat},0`).join(' ');
+    if(boundary.closed){
+      kml += `<Placemark><name>Block Boundary</name><Polygon><outerBoundaryIs><LinearRing><coordinates>${coordStr} ${boundary.points[0].lng},${boundary.points[0].lat},0</coordinates></LinearRing></outerBoundaryIs></Polygon></Placemark>`;
+    } else {
+      kml += `<Placemark><name>Block Boundary (open)</name><LineString><coordinates>${coordStr}</coordinates></LineString></Placemark>`;
+    }
+  }
+  roadFeatures.forEach(f=>{
+    const coordStr = f.coords.map(c=>`${c[1]},${c[0]},0`).join(' ');
+    kml += `<Placemark><name>${f.kind}</name><LineString><coordinates>${coordStr}</coordinates></LineString></Placemark>`;
+  });
+  kml+='</Document></kml>';
+  download((blockId||'hlb')+'_points.kml', kml, 'application/vnd.google-earth.kml+xml');
+};
+
+/* ================= Print / PDF (outline + markings only, no satellite) ================= */
+document.getElementById('exportPrint').onclick = ()=>{
+  if(points.length===0 && trailCoords.length===0 && boundary.points.length===0){ showToast('Nothing to print yet'); return; }
+  buildPrintView();
+  document.getElementById('exportOverlay').classList.remove('open');
+  setTimeout(()=> window.print(), 150);
+};
+window.addEventListener('afterprint', ()=>{ document.getElementById('printArea').style.display='none'; });
+
+function buildPrintView(){
+  const PAGE_W = 297, PAGE_H = 420; // A3 portrait, mm
+  const MARGIN = 10;
+  const HEADER_H = 26, LEGEND_H = 46;
+  const drawW = PAGE_W - MARGIN*2;
+  const drawH = PAGE_H - MARGIN*2 - HEADER_H - LEGEND_H;
+
+  const ref = boundary.points[0] || points[0] || (trailCoords[0] ? {lat:trailCoords[0][0], lng:trailCoords[0][1]} : null);
+  if(!ref){ showToast('Nothing to print yet'); return; }
+  const refLat = ref.lat, refLng = ref.lng;
+  const R = 6378137;
+  function toM(lat,lng){
+    const dLat=(lat-refLat)*Math.PI/180, dLng=(lng-refLng)*Math.PI/180;
+    return { x: dLng*Math.cos(refLat*Math.PI/180)*R, y: -(dLat*R) };
+  }
+  const boundaryM = boundary.points.map(p=>toM(p.lat,p.lng));
+  const trailM = trailCoords.map(c=>toM(c[0],c[1]));
+  const pointsM = points.map(p=>({...p, m:toM(p.lat,p.lng)}));
+  const roadsM = roadFeatures.map(f=>({...f, m:f.coords.map(c=>toM(c[0],c[1]))}));
+
+  const all = boundaryM.concat(boundaryM.length?[]:trailM, pointsM.map(p=>p.m), ...roadsM.map(f=>f.m));
+  const xs = all.map(p=>p.x), ys = all.map(p=>p.y);
+  const minX=Math.min(...xs), maxX=Math.max(...xs), minY=Math.min(...ys), maxY=Math.max(...ys);
+  const spanX = Math.max(maxX-minX, 10), spanY = Math.max(maxY-minY, 10);
+  const pad = 1.15;
+  const mPerMm = Math.max(spanX*pad/drawW, spanY*pad/drawH);
+  const cx = (minX+maxX)/2, cy = (minY+maxY)/2;
+  function toPx(m){ return { x: drawW/2 + (m.x-cx)/mPerMm, y: drawH/2 + (m.y-cy)/mPerMm }; }
+
+  let svgBody = '';
+  // outline: prefer real boundary, fall back to walked trail
+  if(boundaryM.length>1){
+    const pts = boundaryM.map(m=>{ const p=toPx(m); return `${p.x.toFixed(2)},${p.y.toFixed(2)}`; }).join(' ');
+    svgBody += boundary.closed
+      ? `<polygon points="${pts}" fill="none" stroke="#000" stroke-width="0.7"/>`
+      : `<polyline points="${pts}" fill="none" stroke="#000" stroke-width="0.7"/>`;
+  } else if(trailM.length>1){
+    const pts = trailM.map(m=>{ const p=toPx(m); return `${p.x.toFixed(2)},${p.y.toFixed(2)}`; }).join(' ');
+    svgBody += `<polyline points="${pts}" fill="none" stroke="#000" stroke-width="0.5" stroke-dasharray="2,1.4"/>`;
+  }
+  // roads / walkways / streams
+  const roadDash = {road:'', walkway:'2,1.5', stream:'0.6,1.6'};
+  const roadWidth = {road:0.6, walkway:0.4, stream:0.4};
+  roadsM.forEach(f=>{
+    const pts = f.m.map(m=>{ const p=toPx(m); return `${p.x.toFixed(2)},${p.y.toFixed(2)}`; }).join(' ');
+    svgBody += `<polyline points="${pts}" fill="none" stroke="#000" stroke-width="${roadWidth[f.kind]||0.5}" ${roadDash[f.kind]?`stroke-dasharray="${roadDash[f.kind]}"`:''}/>`;
+  });
+  // building symbols
+  pointsM.forEach(p=>{
+    const s = toPx(p.m);
+    svgBody += svgSymbol(p.type, s.x, s.y, 7);
+    svgBody += `<text x="${s.x.toFixed(2)}" y="${(s.y+11).toFixed(2)}" font-size="3.2" font-family="monospace" text-anchor="middle">${escapeXml(p.number)}</text>`;
+  });
+  // north arrow
+  svgBody += `<g transform="translate(${drawW-14},14)">
+    <polygon points="0,-7 3,4 0,1.5 -3,4" fill="#000"/>
+    <text x="0" y="12" font-size="4" text-anchor="middle" font-family="sans-serif" font-weight="bold">N</text>
+  </g>`;
+  // scale bar
+  const barMm = 40;
+  const barMeters = niceScaleMm(barMm*mPerMm);
+  const barPx = barMeters/mPerMm;
+  svgBody += `<g transform="translate(4,${drawH-8})">
+    <line x1="0" y1="0" x2="${barPx.toFixed(1)}" y2="0" stroke="#000" stroke-width="0.6"/>
+    <line x1="0" y1="-1.5" x2="0" y2="1.5" stroke="#000" stroke-width="0.6"/>
+    <line x1="${barPx.toFixed(1)}" y1="-1.5" x2="${barPx.toFixed(1)}" y2="1.5" stroke="#000" stroke-width="0.6"/>
+    <text x="0" y="-3" font-size="3" font-family="monospace">${barMeters} m</text>
+  </g>`;
+
+  const legendItems = buildLegendSvg(drawW);
+
+  const html = `
+    <div style="width:${PAGE_W}mm; padding:${MARGIN}mm; font-family:sans-serif; box-sizing:border-box;">
+      <div style="height:${HEADER_H}mm; border-bottom:0.5pt solid #000; margin-bottom:2mm; display:flex; justify-content:space-between; align-items:flex-end;">
+        <div>
+          <div style="font-size:14pt; font-weight:700;">Houselisting Block — Layout Map</div>
+          <div style="font-size:8pt; font-family:monospace;">Block ID: ${escapeXml(blockId||'—')} &nbsp;&nbsp; Buildings: ${points.length} &nbsp;&nbsp; Outline: ${boundary.points.length>1 ? (boundary.closed?'Closed':'Open') : 'Not set'}</div>
+        </div>
+        <div style="font-size:8pt; font-family:monospace; text-align:right;">Generated ${new Date().toLocaleDateString()}<br>Census 2027 · HLB Field Mapper</div>
+      </div>
+      <svg width="${drawW}mm" height="${drawH}mm" viewBox="0 0 ${drawW} ${drawH}" style="border:0.5pt solid #000;">
+        ${svgBody}
+      </svg>
+      <div style="height:${LEGEND_H}mm; margin-top:2mm; border-top:0.5pt solid #000; padding-top:2mm;">
+        <svg width="${drawW}mm" height="${LEGEND_H-4}mm" viewBox="0 0 ${drawW} ${LEGEND_H-4}">${legendItems}</svg>
+      </div>
+    </div>`;
+  document.getElementById('printArea').innerHTML = html;
+}
+function buildLegendSvg(drawWv){
+  let out='';
+  SYMBOLS.forEach((sym,i)=>{
+    const lx = 6 + (i%3)*(drawWv/3), ly = 8 + Math.floor(i/3)*13;
+    out += `<g transform="translate(${lx},${ly})">${svgSymbolInline(sym,5)}<text x="10" y="1.8" font-size="3" font-family="monospace">${escapeXml(sym.label)}</text></g>`;
+  });
+  const lineLegend = [ {label:'Road', dash:'', w:0.6}, {label:'Walkway', dash:'2,1.5', w:0.4}, {label:'Stream', dash:'0.6,1.6', w:0.4} ];
+  lineLegend.forEach((ll,i)=>{
+    const idx = SYMBOLS.length+i;
+    const lx = 6 + (idx%3)*(drawWv/3), ly = 8 + Math.floor(idx/3)*13;
+    out += `<g transform="translate(${lx},${ly})"><line x1="0" y1="1" x2="8" y2="1" stroke="#000" stroke-width="${ll.w}" ${ll.dash?`stroke-dasharray="${ll.dash}"`:''}/><text x="11" y="2" font-size="3" font-family="monospace">${escapeXml(ll.label)}</text></g>`;
+  });
+  return out;
+}
+function escapeXml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function niceScaleMm(rough){ const steps=[1,2,5,10,20,50,100,200,500,1000,2000,5000]; return steps.reduce((a,b)=>Math.abs(b-rough)<Math.abs(a-rough)?b:a); }
+function svgSymbol(type, cx, cy, s){
+  const black='#000';
+  if(type==='pucca_res') return `<rect x="${cx-s/2}" y="${cy-s/2}" width="${s}" height="${s}" fill="none" stroke="${black}" stroke-width="0.5"/>`;
+  if(type==='pucca_nonres') return `<rect x="${cx-s/2}" y="${cy-s/2}" width="${s}" height="${s}" fill="none" stroke="${black}" stroke-width="0.5"/>` + hatchLines(cx-s/2,cy-s/2,s,s);
+  if(type==='kutcha_res') return `<polygon points="${cx},${cy-s*0.55} ${cx+s*0.55},${cy+s*0.4} ${cx-s*0.55},${cy+s*0.4}" fill="none" stroke="${black}" stroke-width="0.5"/>`;
+  if(type==='kutcha_nonres') return `<polygon points="${cx},${cy-s*0.55} ${cx+s*0.55},${cy+s*0.4} ${cx-s*0.55},${cy+s*0.4}" fill="none" stroke="${black}" stroke-width="0.5"/>` + hatchLines(cx-s/2,cy-s*0.2,s,s*0.5);
+  if(type==='well') return `<circle cx="${cx}" cy="${cy}" r="${s/2.3}" fill="none" stroke="${black}" stroke-width="0.5"/><circle cx="${cx}" cy="${cy}" r="0.6" fill="${black}"/>`;
+  if(type==='landmark') return `<polygon points="${cx},${cy-s/1.8} ${cx+s/1.8},${cy} ${cx},${cy+s/1.8} ${cx-s/1.8},${cy}" fill="none" stroke="${black}" stroke-width="0.5"/>`;
+  return '';
+}
+function svgSymbolInline(sym, s){ return svgSymbol(sym.id, s/2+1, s/2+1, s); }
+function hatchLines(x,y,w,h){
+  let l='';
+  for(let i=0;i<=w+h;i+=w/3){ l+=`<line x1="${x+Math.max(0,i-h)}" y1="${y+Math.min(i,h)}" x2="${x+Math.min(i,w)}" y2="${y+Math.max(0,i-w)}" stroke="#000" stroke-width="0.3"/>`; }
+  return `<g clip-path="url(#clip)">${l}</g>`;
+}
+
+/* ================= Import outline from reference image/PDF ================= */
+let importStep='upload', refImgNaturalW=0, refImgNaturalH=0, currentZoom=1;
+let calibPoints=[], pendingCalibPx=null, imgTransform=null, traceDraft=[];
+let offCanvas=null, offCtx=null, imgData=null, awaitingAutoSeed=false;
+let editingBoundary=false, draftPoints=[], vertexMarkers=[], midMarkers=[], editPolygon=null;
+
+if(window.pdfjsLib){ pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js'; }
+
+document.getElementById('importBtn').onclick=()=>{
+  if(!blockId){ showToast('Enter a Block ID first'); return; }
+  openImportFlow();
+};
+function openImportFlow(){
+  importStep='upload'; calibPoints=[]; traceDraft=[]; imgTransform=null; pendingCalibPx=null; currentZoom=1;
+  document.getElementById('impImageArea').style.display='none';
+  document.getElementById('impUploadArea').style.display='block';
+  document.getElementById('impTitle').textContent='Import Outline from Map Image';
+  document.getElementById('impSub').textContent='Upload the layout map (PDF or image) you already have.';
+  document.getElementById('impActions').innerHTML='<button class="btn-cancel" id="impCancelBtn0">Cancel</button>';
+  document.getElementById('impCancelBtn0').onclick=closeImportFlow;
+  document.getElementById('refFileInput').value='';
+  document.getElementById('importOverlay').classList.add('open');
+}
+function closeImportFlow(){ document.getElementById('importOverlay').classList.remove('open'); }
+
+document.getElementById('refFileInput').addEventListener('change', async (e)=>{
+  const file = e.target.files[0]; if(!file) return;
+  showToast('Loading file…');
+  try{
+    let dataUrl;
+    if(file.type==='application/pdf'){
+      const buf = await file.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({data:buf}).promise;
+      const page = await pdf.getPage(1);
+      const viewport = page.getViewport({scale:2.2});
+      const c = document.createElement('canvas'); c.width=viewport.width; c.height=viewport.height;
+      await page.render({canvasContext:c.getContext('2d'), viewport}).promise;
+      dataUrl = c.toDataURL('image/png');
+    } else {
+      dataUrl = await new Promise((res,rej)=>{ const r=new FileReader(); r.onload=()=>res(r.result); r.onerror=rej; r.readAsDataURL(file); });
+    }
+    loadRefImage(dataUrl);
+  }catch(err){ showToast('Could not read that file'); }
+});
+
+function loadRefImage(dataUrl){
+  const img = document.getElementById('refImgEl');
+  img.onload = ()=>{
+    refImgNaturalW = img.naturalWidth; refImgNaturalH = img.naturalHeight;
+    const wrapW = document.getElementById('calibWrap').clientWidth || 300;
+    currentZoom = Math.min(1, wrapW/refImgNaturalW);
+    applyImgZoom();
+    goToCalibrateStep();
+  };
+  img.src = dataUrl;
+}
+function applyImgZoom(){
+  const img=document.getElementById('refImgEl'), svg=document.getElementById('calibSvg');
+  const w=refImgNaturalW*currentZoom, h=refImgNaturalH*currentZoom;
+  img.style.width=w+'px'; img.style.height=h+'px';
+  svg.style.width=w+'px'; svg.style.height=h+'px';
+  svg.setAttribute('viewBox', `0 0 ${refImgNaturalW} ${refImgNaturalH}`);
+  redrawCalibSvg();
+}
+document.getElementById('zoomInImg').onclick=()=>{ currentZoom=Math.min(currentZoom*1.3,6); applyImgZoom(); };
+document.getElementById('zoomOutImg').onclick=()=>{ currentZoom=Math.max(currentZoom/1.3,0.05); applyImgZoom(); };
+
+function goToCalibrateStep(){
+  importStep='calibrate';
+  document.getElementById('impUploadArea').style.display='none';
+  document.getElementById('impImageArea').style.display='block';
+  document.getElementById('impTitle').textContent='Step 1 of 2 — Calibrate';
+  document.getElementById('impSub').textContent='Tap a landmark you can identify (road junction, building corner), then enter its real coordinates. Repeat for a second point — the further from the first, the more accurate.';
+  document.getElementById('impActions').innerHTML='<button class="btn-cancel" id="impCancelBtn1">Cancel</button>';
+  document.getElementById('impCancelBtn1').onclick=closeImportFlow;
+  attachTapHandler(document.getElementById('refImgEl'), onCalibClick);
+  renderCalibList();
+}
+function onCalibClick(e){
+  if(calibPoints.length>=2 || pendingCalibPx) return;
+  pendingCalibPx = {px:e.offsetX/currentZoom, py:e.offsetY/currentZoom};
+  renderCalibList();
+}
+function renderCalibList(){
+  const el = document.getElementById('calibPointsList');
+  let html = calibPoints.map((c,i)=>`<div>Point ${i+1}: ${c.lat.toFixed(6)}, ${c.lng.toFixed(6)} &#10003;</div>`).join('');
+  if(pendingCalibPx){
+    html += `<div style="margin-top:6px; display:flex; gap:6px; align-items:center; flex-wrap:wrap;">
+      <input id="calibLat" type="number" step="any" placeholder="Latitude" style="flex:1; min-width:100px; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:7px; border-radius:5px; font-family:var(--font-mono); font-size:12px;">
+      <input id="calibLng" type="number" step="any" placeholder="Longitude" style="flex:1; min-width:100px; background:var(--bg); border:1px solid var(--border); color:var(--text); padding:7px; border-radius:5px; font-family:var(--font-mono); font-size:12px;">
+      <button class="btn-save" style="flex:0 0 auto; padding:8px 12px;" id="confirmCalibPt">Confirm</button>
+    </div>`;
+  }
+  el.innerHTML = html;
+  if(pendingCalibPx){
+    document.getElementById('confirmCalibPt').onclick=()=>{
+      const lat=parseFloat(document.getElementById('calibLat').value);
+      const lng=parseFloat(document.getElementById('calibLng').value);
+      if(isNaN(lat)||isNaN(lng)){ showToast('Enter both coordinates'); return; }
+      calibPoints.push({px:pendingCalibPx.px, py:pendingCalibPx.py, lat, lng});
+      pendingCalibPx=null;
+      renderCalibList();
+      if(calibPoints.length===2){ computeImageTransform(); if(imgTransform) goToTraceStep(); }
+    };
+  }
+  redrawCalibSvg();
+}
+function computeImageTransform(){
+  const [c1,c2] = calibPoints;
+  const R=6378137;
+  const dLat=(c2.lat-c1.lat)*Math.PI/180, dLng=(c2.lng-c1.lng)*Math.PI/180;
+  const metX = dLng*Math.cos(c1.lat*Math.PI/180)*R;
+  const metY = dLat*R;
+  const pixVec = {x: c2.px-c1.px, y: -(c2.py-c1.py)};
+  const pixLen = Math.hypot(pixVec.x,pixVec.y);
+  const metLen = Math.hypot(metX,metY);
+  if(pixLen<1e-6){ showToast('Those two points are too close — pick points further apart'); calibPoints=[]; renderCalibList(); return; }
+  const scale = metLen/pixLen;
+  const rotation = Math.atan2(metY,metX) - Math.atan2(pixVec.y,pixVec.x);
+  imgTransform = {refLat:c1.lat, refLng:c1.lng, originPx:{x:c1.px,y:c1.py}, scale, rotation};
+}
+function imagePxToLatLng(px,py){
+  const dx = px - imgTransform.originPx.x;
+  const dy = -(py - imgTransform.originPx.y);
+  const cosR=Math.cos(imgTransform.rotation), sinR=Math.sin(imgTransform.rotation);
+  const mx = (dx*cosR - dy*sinR)*imgTransform.scale;
+  const my = (dx*sinR + dy*cosR)*imgTransform.scale;
+  const R=6378137;
+  const lat = imgTransform.refLat + (my/R)*(180/Math.PI);
+  const lng = imgTransform.refLng + (mx/(R*Math.cos(imgTransform.refLat*Math.PI/180)))*(180/Math.PI);
+  return {lat,lng};
+}
+function goToTraceStep(){
+  importStep='trace'; traceDraft=[]; awaitingAutoSeed=false;
+  offCanvas=null; offCtx=null; imgData=null;
+  document.getElementById('impTitle').textContent='Step 2 of 2 — Trace the Boundary';
+  document.getElementById('impSub').textContent='Tap "Auto-Detect" then tap once directly on the boundary line to trace it automatically — or tap points manually. Tap your first point again to close the loop.';
+  document.getElementById('impActions').innerHTML=`
+    <button id="impAutoDetect">Auto-Detect (beta)</button>
+    <button id="impTraceUndo">Undo</button>
+    <button class="btn-save" id="impTraceFinish" style="flex:1 1 100%;">Close &amp; Save Outline</button>
+    <button class="btn-cancel" id="impCancelBtn2">Cancel</button>`;
+  document.getElementById('impCancelBtn2').onclick=closeImportFlow;
+  document.getElementById('impTraceUndo').onclick=()=>{ traceDraft.pop(); updateTraceCounter(); redrawCalibSvg(); };
+  document.getElementById('impTraceFinish').onclick=finishImageTrace;
+  document.getElementById('impAutoDetect').onclick=()=>{
+    if(!offCanvas) prepareOffscreenCanvas();
+    awaitingAutoSeed=true;
+    showToast('Now tap once directly on the boundary line');
+  };
+  attachTapHandler(document.getElementById('refImgEl'), onTraceClick);
+  updateTraceCounter();
+  redrawCalibSvg();
+}
+function updateTraceCounter(){
+  document.getElementById('calibPointsList').innerHTML = `<strong style="color:var(--amber); font-size:12px;">Boundary points marked: ${traceDraft.length}</strong>`;
+}
+function prepareOffscreenCanvas(){
+  offCanvas = document.createElement('canvas');
+  offCanvas.width = refImgNaturalW; offCanvas.height = refImgNaturalH;
+  offCtx = offCanvas.getContext('2d');
+  offCtx.drawImage(document.getElementById('refImgEl'), 0, 0, refImgNaturalW, refImgNaturalH);
+  imgData = offCtx.getImageData(0,0,refImgNaturalW,refImgNaturalH).data;
+}
+function pixelAt(x,y){
+  x=Math.round(x); y=Math.round(y);
+  if(x<0||y<0||x>=refImgNaturalW||y>=refImgNaturalH) return null;
+  const idx=(y*refImgNaturalW+x)*4;
+  return {r:imgData[idx], g:imgData[idx+1], b:imgData[idx+2]};
+}
+function isBright(x,y,thresh){
+  const p=pixelAt(x,y); if(!p) return false;
+  return p.r>thresh && p.g>thresh && p.b>thresh;
+}
+function isThinLinePixel(x,y){
+  if(!isBright(x,y,195)) return false;
+  let count=0,total=0;
+  for(let dx=-4;dx<=4;dx++) for(let dy=-4;dy<=4;dy++){
+    if(dx===0&&dy===0) continue;
+    total++; if(isBright(x+dx,y+dy,195)) count++;
+  }
+  return (count/total) < 0.55; // excludes solid white blobs (buildings/label text fill)
+}
+function findNearestLinePixel(cx,cy){
+  if(isThinLinePixel(cx,cy)) return {x:cx,y:cy};
+  for(let r=1;r<=15;r++){
+    for(let a=0;a<360;a+=15){
+      const rad=a*Math.PI/180, x=cx+r*Math.cos(rad), y=cy+r*Math.sin(rad);
+      if(isThinLinePixel(x,y)) return {x,y};
+    }
+  }
+  return null;
+}
+function rangeDeg(a,b,step){ const arr=[]; for(let d=a; d<=b; d+=step) arr.push(((d%360)+360)%360); return arr; }
+function traceLineFromSeed(seed){
+  const path=[seed]; let cur=seed, heading=null, gapCount=0;
+  const stepLen=3, maxSteps=4000;
+  for(let step=0; step<maxSteps; step++){
+    let found=null, bestScore=-1;
+    const headings = heading===null ? rangeDeg(0,350,10) : rangeDeg(heading*180/Math.PI-70, heading*180/Math.PI+70, 6);
+    for(const hdeg of headings){
+      const hrad=hdeg*Math.PI/180;
+      for(let r=stepLen; r<=stepLen*3; r+=stepLen){
+        const nx=cur.x+r*Math.cos(hrad), ny=cur.y+r*Math.sin(hrad);
+        if(isThinLinePixel(nx,ny)){
+          const score = heading===null ? 1 : Math.cos(hrad-heading);
+          if(score>bestScore){ bestScore=score; found={x:nx,y:ny,heading:hrad}; }
+        }
+      }
+    }
+    if(!found){
+      if(heading!==null && gapCount<8){
+        gapCount++;
+        cur={x:cur.x+stepLen*3*Math.cos(heading), y:cur.y+stepLen*3*Math.sin(heading)};
+        path.push(cur); continue;
+      }
+      break;
+    }
+    gapCount=0; heading=found.heading; cur={x:found.x,y:found.y}; path.push(cur);
+    if(step>20 && Math.hypot(cur.x-seed.x,cur.y-seed.y) < stepLen*2) break;
+  }
+  return path;
+}
+function perpDist(p,a,b){
+  const dx=b.x-a.x, dy=b.y-a.y, len=Math.hypot(dx,dy);
+  if(len===0) return Math.hypot(p.x-a.x,p.y-a.y);
+  return Math.abs((p.x-a.x)*dy-(p.y-a.y)*dx)/len;
+}
+function douglasPeucker(points, epsilon){
+  if(points.length<3) return points;
+  let maxD=0, idx=0;
+  const first=points[0], last=points[points.length-1];
+  for(let i=1;i<points.length-1;i++){ const d=perpDist(points[i],first,last); if(d>maxD){maxD=d; idx=i;} }
+  if(maxD>epsilon){
+    const left=douglasPeucker(points.slice(0,idx+1), epsilon);
+    const right=douglasPeucker(points.slice(idx), epsilon);
+    return left.slice(0,-1).concat(right);
+  }
+  return [first,last];
+}
+function onTraceClick(e){
+  const px = e.offsetX/currentZoom, py = e.offsetY/currentZoom;
+  if(awaitingAutoSeed){
+    awaitingAutoSeed=false;
+    const seed = findNearestLinePixel(px,py);
+    if(!seed){ showToast('No line detected there — try tapping more precisely, or trace manually'); return; }
+    showToast('Tracing…');
+    setTimeout(()=>{
+      const raw = traceLineFromSeed(seed);
+      if(raw.length<10){ showToast('Could not trace that line — try manual tapping'); return; }
+      let simplified = douglasPeucker(raw, 2.5);
+      if(simplified.length>2){
+        const a=simplified[0], b=simplified[simplified.length-1];
+        if(Math.hypot(a.x-b.x,a.y-b.y) < 6) simplified = simplified.slice(0,-1);
+      }
+      traceDraft = simplified.map(p=>({px:p.x, py:p.y}));
+      updateTraceCounter();
+      redrawCalibSvg();
+      showToast('Auto-detected '+traceDraft.length+' points — review, then Save (edit further anytime with the EDIT button)');
+    }, 50);
+    return;
+  }
+  if(traceDraft.length>=3){
+    const d = Math.hypot(px-traceDraft[0].px, py-traceDraft[0].py);
+    if(d < (18/currentZoom)){ finishImageTrace(); return; }
+  }
+  traceDraft.push({px,py});
+  updateTraceCounter();
+  redrawCalibSvg();
+}
+function redrawCalibSvg(){
+  const svg=document.getElementById('calibSvg');
+  let s='';
+  calibPoints.forEach((c,i)=>{ s+=`<circle cx="${c.px}" cy="${c.py}" r="${8/currentZoom}" fill="#3ddc6a" stroke="#0d1a16" stroke-width="${2/currentZoom}"/><text x="${c.px+10/currentZoom}" y="${c.py}" fill="#3ddc6a" font-size="${16/currentZoom}" font-family="monospace">${i+1}</text>`; });
+  if(pendingCalibPx){ s+=`<circle cx="${pendingCalibPx.px}" cy="${pendingCalibPx.py}" r="${8/currentZoom}" fill="none" stroke="#e8a23d" stroke-width="${2/currentZoom}"/>`; }
+  if(importStep==='trace' && traceDraft.length){
+    const pts = traceDraft.map(p=>`${p.px},${p.py}`).join(' ');
+    s += `<polyline points="${pts}" fill="none" stroke="#ff5a5a" stroke-width="${4/currentZoom}"/>`;
+    traceDraft.forEach((p,i)=>{ s+=`<circle cx="${p.px}" cy="${p.py}" r="${8/currentZoom}" fill="#ff5a5a" stroke="#fff" stroke-width="${2/currentZoom}"/><text x="${p.px}" y="${p.py-12/currentZoom}" fill="#fff" font-size="${13/currentZoom}" font-family="monospace" text-anchor="middle" font-weight="bold">${i+1}</text>`; });
+  }
+  svg.innerHTML = s;
+}
+function finishImageTrace(){
+  if(traceDraft.length<3){ showToast('Add at least 3 boundary points'); return; }
+  const pts = traceDraft.map(p=>{ const ll=imagePxToLatLng(p.px,p.py); return {lat:ll.lat, lng:ll.lng, manual:true}; });
+  boundary = {points:pts, closed:true, method:'image'};
+  closeImportFlow();
+  renderBoundary(); refreshInsideFlags(); saveBlock(); fitToPoints();
+  showToast('Outline imported from image');
+}
+
+/* ================= Edit existing boundary (drag / add / delete vertices) ================= */
+const vertexIcon = L.divIcon({className:'', html:'<div style="width:16px;height:16px;border-radius:50%;background:#3ddc6a;border:2px solid #0d1a16;"></div>', iconSize:[16,16], iconAnchor:[8,8]});
+const midIcon = L.divIcon({className:'', html:'<div style="width:14px;height:14px;border-radius:50%;background:rgba(232,162,61,0.9);border:1.5px solid #1a1408; display:flex; align-items:center; justify-content:center; color:#1a1408; font-size:10px; font-weight:bold; line-height:1;">+</div>', iconSize:[14,14], iconAnchor:[7,7]});
+
+document.getElementById('editBoundaryBtn').onclick=()=>{
+  if(!blockId){ showToast('Enter a Block ID first'); return; }
+  if(boundary.points.length<3){ showToast('No outline yet — create one first with OUT or IMG'); return; }
+  enterBoundaryEditMode();
+};
+function enterBoundaryEditMode(){
+  editingBoundary=true;
+  draftPoints = boundary.points.map(p=>({lat:p.lat, lng:p.lng}));
+  clearBoundaryLayer();
+  editPolygon = L.polygon(draftPoints.map(p=>[p.lat,p.lng]), {color:'#3ddc6a', weight:2.5, fillOpacity:0.05}).addTo(map);
+  buildVertexMarkers();
+  followMode=false; document.getElementById('followBtn').classList.remove('active');
+  showBanner('Drag a point to reshape. Tap + to add a point. Tap a point to delete it.', `
+    <button class="primary" id="ebSave">Save Changes</button>
+    <button class="danger" id="ebCancel">Cancel</button>`);
+  document.getElementById('ebSave').onclick=saveBoundaryEdit;
+  document.getElementById('ebCancel').onclick=cancelBoundaryEdit;
+}
+function buildVertexMarkers(){
+  vertexMarkers.forEach(m=>map.removeLayer(m)); vertexMarkers=[];
+  midMarkers.forEach(m=>map.removeLayer(m)); midMarkers=[];
+  draftPoints.forEach((p,i)=>{
+    const m = L.marker([p.lat,p.lng], {icon:vertexIcon, draggable:true}).addTo(map);
+    m.on('drag', (e)=>{
+      const ll=e.target.getLatLng();
+      draftPoints[i]={lat:ll.lat,lng:ll.lng};
+      editPolygon.setLatLngs(draftPoints.map(pp=>[pp.lat,pp.lng]));
+      repositionMidMarkers();
+    });
+    m.on('dragend', ()=> repositionMidMarkers());
+    m.on('click', (e)=>{
+      L.DomEvent.stopPropagation(e);
+      if(draftPoints.length<=3){ showToast('An outline needs at least 3 points'); return; }
+      if(confirm('Delete this boundary point?')){
+        draftPoints.splice(i,1);
+        buildVertexMarkers();
+        editPolygon.setLatLngs(draftPoints.map(pp=>[pp.lat,pp.lng]));
+      }
+    });
+    vertexMarkers.push(m);
+  });
+  repositionMidMarkers();
+}
+function repositionMidMarkers(){
+  midMarkers.forEach(m=>map.removeLayer(m)); midMarkers=[];
+  draftPoints.forEach((p,i)=>{
+    const j=(i+1)%draftPoints.length;
+    const mid={lat:(p.lat+draftPoints[j].lat)/2, lng:(p.lng+draftPoints[j].lng)/2};
+    const mm = L.marker([mid.lat,mid.lng], {icon:midIcon}).addTo(map);
+    mm.on('click', (e)=>{
+      L.DomEvent.stopPropagation(e);
+      draftPoints.splice(i+1,0,{lat:mid.lat,lng:mid.lng});
+      buildVertexMarkers();
+      editPolygon.setLatLngs(draftPoints.map(pp=>[pp.lat,pp.lng]));
+    });
+    midMarkers.push(mm);
+  });
+}
+function saveBoundaryEdit(){
+  boundary = {points: draftPoints.map(p=>({lat:p.lat, lng:p.lng, manual:true})), closed:true, method: boundary.method||'edited'};
+  exitBoundaryEditMode();
+  renderBoundary(); refreshInsideFlags(); saveBlock(); fitToPoints();
+  showToast('Outline updated — buildings re-checked against new shape');
+}
+function cancelBoundaryEdit(){
+  exitBoundaryEditMode();
+  renderBoundary();
+  showToast('Edit cancelled — no changes saved');
+}
+function exitBoundaryEditMode(){
+  editingBoundary=false;
+  vertexMarkers.forEach(m=>map.removeLayer(m)); vertexMarkers=[];
+  midMarkers.forEach(m=>map.removeLayer(m)); midMarkers=[];
+  if(editPolygon){ map.removeLayer(editPolygon); editPolygon=null; }
+  hideBanner();
+}
+
+/* ================= Toast ================= */
+let toastTimer;
+function showToast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),2000); }
+
+/* ================= Block handling ================= */
+const blockInput=document.getElementById('blockId');
+blockInput.addEventListener('change', async ()=>{
+  blockId=blockInput.value.trim();
+  if(blockId){ await loadBlock(blockId); try{ await storageSet('hlb:lastBlock', blockId); }catch(e){} showToast('Loaded block: '+blockId); }
+});
+
+/* ================= Init ================= */
+(async function init(){
+  try{
+    const last = await storageGet('hlb:lastBlock');
+    if(last && last.value){ blockInput.value=last.value; blockId=last.value; await loadBlock(blockId); }
+  }catch(e){}
+  startGps();
+})();
+</script>
+</body>
+</html>
