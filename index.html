@@ -145,6 +145,7 @@
   <div class="mapctrls">
     <button id="followBtn" class="active" title="Follow my location">&#9678;</button>
     <button id="layerBtn" title="Toggle satellite / street">&#9673;</button>
+    <button id="trailToggleBtn" class="active textbtn" title="Toggle walking trail">TRL</button>
     <button id="outlineBtn" class="textbtn" title="Create outline">OUT</button>
     <button id="roadBtn" class="textbtn" title="Draw roads/streams">RD</button>
     <button id="importBtn" class="textbtn" title="Import outline from image/PDF">IMG</button>
@@ -204,6 +205,16 @@
   </div>
 </div></div>
 
+<div class="overlay" id="roadChoiceOverlay"><div class="sheet">
+  <h2>Draw Road / Walkway / Stream</h2>
+  <div class="sub">Choose how to trace this line</div>
+  <div class="sheet-actions" style="flex-direction:column;">
+    <button class="btn-save" id="chooseRoadWalk" style="margin-bottom:8px;">1. Walk or Bike It</button>
+    <button class="btn-save" id="chooseRoadTap" style="margin-bottom:8px; background:var(--teal);">2. Tap Points on Map</button>
+    <button class="btn-cancel" id="cancelRoadChoice">Cancel</button>
+  </div>
+</div></div>
+
 <div class="overlay" id="listOverlay"><div class="sheet">
   <h2>Marked points</h2>
   <div class="sub" id="listSub">0 points in this block</div>
@@ -218,6 +229,8 @@
     <button class="btn-save" id="exportCsv" style="margin-bottom:8px;">Download CSV</button>
     <button class="btn-save" id="exportKml" style="margin-bottom:8px; background:var(--teal);">Download KML</button>
     <button class="btn-save" id="exportPrint" style="margin-bottom:8px; background:var(--paper); color:#1a1408;">Print / Save as PDF (A3)</button>
+    <button class="btn-save" id="exportBackup" style="margin-bottom:8px; background:#8a7fd6;">Export Full Backup (All Blocks)</button>
+    <div class="field" style="margin-top:4px;"><label>Import Backup File (from another phone)</label><input type="file" id="importBackupInput" accept="application/json"></div>
     <button class="btn-cancel" id="closeExport">Close</button>
   </div>
 </div></div>
@@ -270,6 +283,8 @@ let roadFeatures=[], roadLayers={};
 let mode=null; // null | 'boundary-walk' | 'boundary-coords' | 'road-draw'
 let boundaryDraft=[], boundaryDraftLine=null, boundaryVertexMarkers=[], boundaryWalkTimer=null, boundaryClickHandler=null;
 let roadDraftCoords=[], roadDraftLine=null, roadSelectedKind='road', roadClickHandlerRef=null;
+let ambientTrailOn=true;
+let roadWalkRecording=false, roadWalkCoords=[], roadWalkLine=null, roadWalkKind='road';
 
 /* ================= Local persistence (works on any real website, unlike window.storage) ================= */
 function storageGet(key){
@@ -318,6 +333,14 @@ document.getElementById('followBtn').onclick = (e)=>{
   if(followMode && currentPos) map.panTo([currentPos.lat, currentPos.lng]);
 };
 map.on('dragstart', ()=>{ followMode=false; document.getElementById('followBtn').classList.remove('active'); });
+
+document.getElementById('trailToggleBtn').onclick = (e)=>{
+  ambientTrailOn = !ambientTrailOn;
+  e.currentTarget.classList.toggle('active', ambientTrailOn);
+  if(!ambientTrailOn && trailLine){ map.removeLayer(trailLine); trailLine=null; }
+  else if(ambientTrailOn && trailCoords.length>1){ trailLine = L.polyline(trailCoords,{color:'#e8a23d', weight:2, opacity:0.55}).addTo(map); }
+  showToast('Walking trail '+(ambientTrailOn?'on':'off'));
+};
 
 /* live position icon */
 const liveIcon = L.divIcon({className:'', html:'<div class="pulse-dot"></div>', iconSize:[16,16], iconAnchor:[8,8]});
@@ -512,8 +535,61 @@ function finalizeBoundary(){
 /* ---- Road / stream drawing ---- */
 document.getElementById('roadBtn').onclick=()=>{
   if(!blockId){ showToast('Enter a Block ID first'); return; }
-  startRoadDraw();
+  document.getElementById('roadChoiceOverlay').classList.add('open');
 };
+document.getElementById('cancelRoadChoice').onclick=()=>document.getElementById('roadChoiceOverlay').classList.remove('open');
+document.getElementById('chooseRoadTap').onclick=()=>{ document.getElementById('roadChoiceOverlay').classList.remove('open'); startRoadDraw(); };
+document.getElementById('chooseRoadWalk').onclick=()=>{ document.getElementById('roadChoiceOverlay').classList.remove('open'); startRoadWalk(); };
+
+function startRoadWalk(){
+  mode='road-walk'; roadWalkRecording=true; roadWalkCoords=[];
+  if(roadWalkLine){ map.removeLayer(roadWalkLine); roadWalkLine=null; }
+  showBanner('Recording line — walk or bike it now', `
+    <button class="primary" id="rwEnd">End Recording</button>
+    <button class="danger" id="rwCancel">Cancel</button>`);
+  document.getElementById('rwEnd').onclick=finishRoadWalkRecording;
+  document.getElementById('rwCancel').onclick=cancelRoadWalk;
+  showToast('Recording started — walk the line now');
+}
+function cancelRoadWalk(){
+  roadWalkRecording=false;
+  if(roadWalkLine){ map.removeLayer(roadWalkLine); roadWalkLine=null; }
+  roadWalkCoords=[]; mode=null; hideBanner();
+  showToast('Recording cancelled');
+}
+function finishRoadWalkRecording(){
+  roadWalkRecording=false;
+  if(roadWalkCoords.length<2){ showToast('Not enough movement recorded'); cancelRoadWalk(); return; }
+  roadWalkKind='road';
+  showBanner('Choose the type for this line, then save.', `
+    <button class="btn-save" id="rwSave" style="flex:1 1 100%;">Save Line</button>
+    <button class="danger" id="rwDiscard">Discard</button>`,
+    `<div class="chip-row">
+      <button class="chip selected" id="rwChipRoad">Road</button>
+      <button class="chip" id="rwChipWalk">Walkway</button>
+      <button class="chip" id="rwChipStream">Stream</button>
+    </div>`);
+  document.getElementById('rwChipRoad').onclick=()=>setRoadWalkKind('road');
+  document.getElementById('rwChipWalk').onclick=()=>setRoadWalkKind('walkway');
+  document.getElementById('rwChipStream').onclick=()=>setRoadWalkKind('stream');
+  document.getElementById('rwSave').onclick=saveRoadWalk;
+  document.getElementById('rwDiscard').onclick=cancelRoadWalk;
+}
+function setRoadWalkKind(k){
+  roadWalkKind=k;
+  document.getElementById('rwChipRoad').classList.toggle('selected', k==='road');
+  document.getElementById('rwChipWalk').classList.toggle('selected', k==='walkway');
+  document.getElementById('rwChipStream').classList.toggle('selected', k==='stream');
+}
+function saveRoadWalk(){
+  const feature={id:Date.now()+'-'+Math.random().toString(36).slice(2,6), kind:roadWalkKind, coords:roadWalkCoords, t:new Date().toISOString()};
+  roadFeatures.push(feature); renderRoadFeature(feature);
+  if(roadWalkLine){ map.removeLayer(roadWalkLine); roadWalkLine=null; }
+  roadWalkCoords=[]; mode=null; hideBanner();
+  saveBlock();
+  showToast(feature.kind+' saved from walked path');
+}
+
 function startRoadDraw(){
   mode='road-draw'; roadDraftCoords=[]; roadSelectedKind='road';
   if(roadDraftLine){ map.removeLayer(roadDraftLine); roadDraftLine=null; }
@@ -586,11 +662,19 @@ function onPos(pos){
   else { accCircle.setLatLng(latlng); accCircle.setRadius(acc); }
 
   const last = trailCoords[trailCoords.length-1];
-  if(!last || map.distance(last, latlng) > 1.5){
+  if(ambientTrailOn && (!last || map.distance(last, latlng) > 1.5)){
     trailCoords.push(latlng);
     if(trailCoords.length>1000) trailCoords.shift();
     if(!trailLine) trailLine = L.polyline(trailCoords,{color:'#e8a23d', weight:2, opacity:0.55}).addTo(map);
     else trailLine.setLatLngs(trailCoords);
+  }
+  if(roadWalkRecording){
+    const lastRw = roadWalkCoords[roadWalkCoords.length-1];
+    if(!lastRw || map.distance(lastRw, latlng) > 1.5){
+      roadWalkCoords.push(latlng);
+      if(!roadWalkLine) roadWalkLine = L.polyline(roadWalkCoords,{color:'#ffffff', weight:3}).addTo(map);
+      else roadWalkLine.setLatLngs(roadWalkCoords);
+    }
   }
   if(firstFix){ map.setView(latlng, 19); firstFix=false; }
   else if(followMode){ map.panTo(latlng); }
@@ -623,8 +707,14 @@ renderSymbolGrid();
 function addMarkerForPoint(pt){
   const sym = SYMBOLS.find(s=>s.id===pt.type)||SYMBOLS[0];
   const icon = L.icon({iconUrl: symbolToDataUrl(sym,44,'#eae6d9'), iconSize:[28,28], iconAnchor:[14,14]});
-  const m = L.marker([pt.lat,pt.lng], {icon}).addTo(map);
-  m.bindPopup(`<div class="popup-num">${pt.number}</div><div class="popup-meta">${sym.label}${pt.note?(' · '+pt.note):''}</div><button class="popup-del" data-id="${pt.id}">Delete point</button>`);
+  const m = L.marker([pt.lat,pt.lng], {icon, draggable:true}).addTo(map);
+  m.bindPopup(`<div class="popup-num">${pt.number}</div><div class="popup-meta">${sym.label}${pt.note?(' · '+pt.note):''}${pt.adjusted?' · moved from GPS point':''}</div><button class="popup-del" data-id="${pt.id}">Delete point</button>`);
+  m.on('dragend', (e)=>{
+    const ll = e.target.getLatLng();
+    pt.lat = ll.lat; pt.lng = ll.lng; pt.adjusted = true;
+    refreshInsideFlags(); saveBlock();
+    showToast('Marker position adjusted');
+  });
   m.on('popupopen', (e)=>{
     e.popup.getElement().querySelector('.popup-del').onclick = ()=>{
       points = points.filter(p=>p.id!==pt.id);
@@ -666,7 +756,7 @@ function renderList(){
   [...points].sort((a,b)=>a.number.localeCompare(b.number,undefined,{numeric:true})).forEach(pt=>{
     const sym=SYMBOLS.find(s=>s.id===pt.type)||SYMBOLS[0];
     const row=document.createElement('div'); row.className='point-row';
-    row.innerHTML=`<canvas width="48" height="48"></canvas><div class="pinfo"><div class="pnum">${pt.number}</div><div class="pmeta">${sym.label} &middot; ${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}</div></div><button class="pdel">&times;</button>`;
+    row.innerHTML=`<canvas width="48" height="48"></canvas><div class="pinfo"><div class="pnum">${pt.number}</div><div class="pmeta">${sym.label} &middot; ${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}${pt.adjusted?' &middot; moved':''}</div></div><button class="pdel">&times;</button>`;
     sym.draw(row.querySelector('canvas').getContext('2d'),24,24,20,sym.hatch,'#eae6d9');
     row.querySelector('.pdel').onclick=()=>{
       points=points.filter(p=>p.id!==pt.id);
@@ -688,8 +778,8 @@ function download(filename, content, mime){
 }
 document.getElementById('exportCsv').onclick=()=>{
   if(points.length===0){ showToast('No points to export'); return; }
-  let csv='building_number,type,latitude,longitude,accuracy_m,timestamp,note\n';
-  points.forEach(p=>{ csv+=`"${p.number}","${p.type}",${p.lat},${p.lng},${p.acc||''},"${p.t}","${(p.note||'').replace(/"/g,"'")}"\n`; });
+  let csv='building_number,type,latitude,longitude,accuracy_m,timestamp,adjusted,note\n';
+  points.forEach(p=>{ csv+=`"${p.number}","${p.type}",${p.lat},${p.lng},${p.acc||''},"${p.t}","${p.adjusted?'yes':'no'}","${(p.note||'').replace(/"/g,"'")}"\n`; });
   download((blockId||'hlb')+'_points.csv', csv, 'text/csv');
 };
 document.getElementById('exportKml').onclick=()=>{
@@ -1214,6 +1304,37 @@ function exitBoundaryEditMode(){
   if(editPolygon){ map.removeLayer(editPolygon); editPolygon=null; }
   hideBanner();
 }
+
+/* ================= Full backup export/import (for transferring between phones) ================= */
+document.getElementById('exportBackup').onclick=()=>{
+  const backup = {app:'hlb-field-mapper', exportedAt:new Date().toISOString(), blocks:{}};
+  for(let i=0;i<localStorage.length;i++){
+    const key = localStorage.key(i);
+    if(key && key.startsWith('hlb:') && key!=='hlb:lastBlock'){
+      try{ backup.blocks[key.slice(4)] = JSON.parse(localStorage.getItem(key)); }catch(e){}
+    }
+  }
+  const count = Object.keys(backup.blocks).length;
+  if(count===0){ showToast('No saved blocks to back up yet'); return; }
+  download('hlb_backup_'+new Date().toISOString().slice(0,10)+'.json', JSON.stringify(backup), 'application/json');
+  showToast('Backed up '+count+' block(s)');
+};
+document.getElementById('importBackupInput').addEventListener('change', async (e)=>{
+  const file = e.target.files[0]; if(!file) return;
+  try{
+    const text = await file.text();
+    const data = JSON.parse(text);
+    if(!data || !data.blocks){ showToast('Not a valid backup file'); return; }
+    let count=0;
+    for(const [bId,bData] of Object.entries(data.blocks)){
+      await storageSet('hlb:'+bId, JSON.stringify(bData));
+      count++;
+    }
+    showToast('Imported '+count+' block(s)');
+    if(blockId && data.blocks[blockId]){ await loadBlock(blockId); }
+    e.target.value='';
+  }catch(err){ showToast('Could not read that backup file'); }
+});
 
 /* ================= Toast ================= */
 let toastTimer;
