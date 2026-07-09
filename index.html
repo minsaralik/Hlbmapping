@@ -65,6 +65,12 @@
   .chip.selected{background:var(--teal); color:#0d1a16; border-color:var(--teal); font-weight:700;}
 
   .pulse-dot{width:16px; height:16px; border-radius:50%; background:var(--teal); border:2px solid var(--paper); box-shadow:0 0 0 rgba(95,168,149,0.5); animation:radar 2s infinite;}
+  .hlb-symbol{position:relative; width:34px; height:34px; display:flex; align-items:center; justify-content:center;}
+  .hlb-symbol img{width:28px; height:28px; display:block;}
+  .hlb-symbol .num{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); font-family:var(--font-mono); font-size:7px; font-weight:700; line-height:1; color:var(--amber); background:rgba(22,33,29,0.72); padding:1px 2px; border-radius:2px; max-width:24px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none;}
+  .hlb-symbol .num.outside{top:32px; transform:translateX(-50%); background:rgba(22,33,29,0.9); max-width:52px;}
+  .edit-vertex{width:14px; height:14px; border-radius:50%; background:var(--amber); border:2px solid var(--paper); box-shadow:0 1px 5px rgba(0,0,0,0.45);}
+  .pan-mode .leaflet-container{cursor:crosshair;}
   @keyframes radar{0%{box-shadow:0 0 0 0 rgba(95,168,149,0.55);} 70%{box-shadow:0 0 0 16px rgba(95,168,149,0);} 100%{box-shadow:0 0 0 0 rgba(95,168,149,0);}}
 
   .leaflet-popup-content-wrapper{background:var(--bg-raised); color:var(--text); border-radius:8px;}
@@ -153,6 +159,13 @@
   </div>
   <div class="legend-toggle"><button id="legendToggle">LEGEND</button></div>
   <div class="legend-panel" id="legendPanel"></div>
+  <div id="panCrosshair" style="display:none; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); z-index:600; pointer-events:none;">
+    <svg width="44" height="44" viewBox="0 0 44 44">
+      <line x1="22" y1="2" x2="22" y2="42" stroke="#e8a23d" stroke-width="2"/>
+      <line x1="2" y1="22" x2="42" y2="22" stroke="#e8a23d" stroke-width="2"/>
+      <circle cx="22" cy="22" r="7" fill="none" stroke="#e8a23d" stroke-width="2"/>
+    </svg>
+  </div>
 </div>
 
 <div class="actionbar">
@@ -280,20 +293,116 @@ let blockId='', points=[], currentPos=null, selectedSymbol=SYMBOLS[0].id, follow
 let map, liveMarker, accCircle, trailLine, trailCoords=[], pointMarkers={}, warningRings={};
 let boundary={points:[], closed:false, method:null}, boundaryLayer=null;
 let roadFeatures=[], roadLayers={};
-let mode=null; // null | 'boundary-walk' | 'boundary-coords' | 'road-draw'
+let mode=null; // null | 'boundary-walk' | 'boundary-coords' | 'road-draw' | 'place-building' | 'road-edit'
+let pendingMarkLatLng=null, editingRoadId=null, roadEditMarkers=[], roadEditOriginalCoords=null, roadEditOriginalKind=null;
 let boundaryDraft=[], boundaryDraftLine=null, boundaryVertexMarkers=[], boundaryWalkTimer=null, boundaryClickHandler=null;
 let roadDraftCoords=[], roadDraftLine=null, roadSelectedKind='road', roadClickHandlerRef=null;
 let ambientTrailOn=true;
 let roadWalkRecording=false, roadWalkCoords=[], roadWalkLine=null, roadWalkKind='road';
 
-/* ================= Local persistence (works on any real website, unlike window.storage) ================= */
-function storageGet(key){
-  try{ const v = localStorage.getItem(key); return Promise.resolve(v===null ? null : {key, value:v}); }
-  catch(e){ return Promise.reject(e); }
+/* ================= IndexedDB persistence (larger and safer than localStorage) ================= */
+const DB_NAME = 'hlb-field-mapper-db';
+const DB_VERSION = 1;
+const DB_STORE = 'kv';
+let dbPromise = null;
+
+function openHlbDb(){
+  if(dbPromise) return dbPromise;
+  dbPromise = new Promise((resolve, reject)=>{
+    if(!('indexedDB' in window)){
+      reject(new Error('IndexedDB not supported'));
+      return;
+    }
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = (e)=>{
+      const db = e.target.result;
+      if(!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE, {keyPath:'key'});
+    };
+    req.onsuccess = ()=> resolve(req.result);
+    req.onerror = ()=> reject(req.error || new Error('IndexedDB open failed'));
+  });
+  return dbPromise;
 }
-function storageSet(key, value){
-  try{ localStorage.setItem(key, value); return Promise.resolve({key, value}); }
-  catch(e){ return Promise.reject(e); }
+
+async function storageGet(key){
+  try{
+    const db = await openHlbDb();
+    const value = await new Promise((resolve,reject)=>{
+      const tx = db.transaction(DB_STORE,'readonly');
+      const store = tx.objectStore(DB_STORE);
+      const req = store.get(key);
+      req.onsuccess = ()=> resolve(req.result ? req.result.value : null);
+      req.onerror = ()=> reject(req.error);
+    });
+    if(value !== null && value !== undefined) return {key, value};
+  }catch(e){
+    console.warn('IndexedDB read failed, trying localStorage fallback', e);
+  }
+
+  // Fallback + migration support for older versions of this app.
+  try{
+    const v = localStorage.getItem(key);
+    if(v !== null){
+      try{ await storageSet(key, v); }catch(e){}
+      return {key, value:v};
+    }
+  }catch(e){}
+  return null;
+}
+
+async function storageSet(key, value){
+  try{
+    const db = await openHlbDb();
+    await new Promise((resolve,reject)=>{
+      const tx = db.transaction(DB_STORE,'readwrite');
+      const store = tx.objectStore(DB_STORE);
+      const req = store.put({key, value, updatedAt:new Date().toISOString()});
+      req.onerror = ()=> reject(req.error);
+      tx.oncomplete = ()=> resolve();
+      tx.onerror = ()=> reject(tx.error || req.error);
+    });
+    return {key, value};
+  }catch(e){
+    // Last-resort fallback for old/limited browsers.
+    try{ localStorage.setItem(key, value); return {key, value}; }
+    catch(e2){ throw e; }
+  }
+}
+
+async function storageList(prefix){
+  const out = [];
+  try{
+    const db = await openHlbDb();
+    await new Promise((resolve,reject)=>{
+      const tx = db.transaction(DB_STORE,'readonly');
+      const store = tx.objectStore(DB_STORE);
+      const req = store.openCursor();
+      req.onsuccess = (e)=>{
+        const cursor = e.target.result;
+        if(cursor){
+          const row = cursor.value;
+          if(row && row.key && row.key.startsWith(prefix)) out.push({key:row.key, value:row.value});
+          cursor.continue();
+        }
+      };
+      req.onerror = ()=> reject(req.error);
+      tx.oncomplete = ()=> resolve();
+      tx.onerror = ()=> reject(tx.error || req.error);
+    });
+  }catch(e){
+    console.warn('IndexedDB list failed, trying localStorage fallback', e);
+  }
+
+  // Include old localStorage entries that may not be migrated yet.
+  try{
+    for(let i=0;i<localStorage.length;i++){
+      const key = localStorage.key(i);
+      if(key && key.startsWith(prefix) && !out.some(x=>x.key===key)){
+        out.push({key, value:localStorage.getItem(key)});
+      }
+    }
+  }catch(e){}
+  return out;
 }
 function attachTapHandler(el, handler){
   let downPos=null;
@@ -408,6 +517,10 @@ function pointInPolygon(lat,lng,poly){
   }
   return inside;
 }
+function hasActiveBoundary(){ return boundary.closed && boundary.points.length>=3; }
+function isInsideBoundary(lat,lng){ return !hasActiveBoundary() || pointInPolygon(lat,lng,boundary.points); }
+function warnOutOfBoundary(){ showToast("You're outside the boundary"); }
+function boundaryContainsLine(coords){ return !hasActiveBoundary() || coords.every(c=>isInsideBoundary(c[0],c[1])); }
 function refreshInsideFlags(){
   Object.values(warningRings).forEach(w=>map.removeLayer(w)); warningRings={};
   if(!boundary.closed || boundary.points.length<3) return;
@@ -424,8 +537,140 @@ function roadStyle(kind){
   if(kind==='stream') return {color:'#4fa8e8', weight:2.5, dashArray:'1,4', opacity:0.9};
   return {color:'#f2f2f2', weight:3, opacity:0.9};
 }
-function renderRoadFeature(f){ roadLayers[f.id] = L.polyline(f.coords, roadStyle(f.kind)).addTo(map); }
+function renderRoadFeature(f){
+  const layer = L.polyline(f.coords, roadStyle(f.kind)).addTo(map);
+  layer.on('click', ()=>openRoadPopup(f));
+  roadLayers[f.id] = layer;
+}
 function renderAllRoads(){ clearRoadLayers(); roadFeatures.forEach(renderRoadFeature); }
+function lineLabel(kind){ return kind==='walkway' ? 'Walkway' : (kind==='stream' ? 'Stream' : 'Road'); }
+function openRoadPopup(f){
+  const layer=roadLayers[f.id]; if(!layer) return;
+  const label = lineLabel(f.kind);
+  layer.bindPopup(`<div class="popup-num">${label}</div><div class="popup-meta">${f.coords.length} points · tap Edit to reshape/change type</div><button class="popup-del" id="roadEditBtn">Edit</button><button class="popup-del" id="roadDeleteBtn" style="margin-left:6px;">Delete</button>`).openPopup();
+  setTimeout(()=>{
+    const e=document.getElementById('roadEditBtn'), d=document.getElementById('roadDeleteBtn');
+    if(e) e.onclick=()=>startRoadEdit(f.id);
+    if(d) d.onclick=()=>deleteRoadFeature(f.id);
+  },0);
+}
+function deleteRoadFeature(id){
+  const f=roadFeatures.find(r=>r.id===id);
+  const label=lineLabel(f && f.kind);
+  if(!confirm('Delete this '+label.toLowerCase()+'?')) return;
+  const layer=roadLayers[id]; if(layer) map.removeLayer(layer);
+  delete roadLayers[id]; roadFeatures=roadFeatures.filter(r=>r.id!==id); saveBlock(); showToast(label+' deleted');
+}
+function startRoadEdit(id){
+  finishRoadDrawMode(); cancelRoadEdit(false);
+  const f=roadFeatures.find(r=>r.id===id); if(!f) return;
+  editingRoadId=id; roadEditOriginalCoords=f.coords.map(c=>[c[0],c[1]]); roadEditOriginalKind=f.kind; mode='road-edit';
+  if(roadLayers[id]) roadLayers[id].closePopup();
+  renderRoadEditBanner(f);
+  rebuildRoadEditMarkers();
+}
+function renderRoadEditBanner(f){
+  showBanner('Editing '+lineLabel(f.kind).toLowerCase()+' — drag points to reshape.',
+    `<button class="primary" id="reSave">Save</button><button id="reAdd">Add Point</button><button class="danger" id="reDelete">Delete</button><button id="reCancel">Cancel</button>`,
+    `<div class="chip-row">
+      <button class="chip ${f.kind==='road'?'selected':''}" id="reTypeRoad">Road</button>
+      <button class="chip ${f.kind==='walkway'?'selected':''}" id="reTypeWalk">Walkway</button>
+      <button class="chip ${f.kind==='stream'?'selected':''}" id="reTypeStream">Stream</button>
+    </div><div class="db-label" style="color:var(--text-dim);font-size:9px;">Tip: tap Add Point, then tap inside the boundary to insert a new vertex. Long-press a point to remove it.</div>`);
+  document.getElementById('reSave').onclick=saveRoadEdit;
+  document.getElementById('reDelete').onclick=()=>{ const id=f.id; cancelRoadEdit(false); deleteRoadFeature(id); };
+  document.getElementById('reCancel').onclick=()=>cancelRoadEdit(true);
+  document.getElementById('reTypeRoad').onclick=()=>changeEditingLineType('road');
+  document.getElementById('reTypeWalk').onclick=()=>changeEditingLineType('walkway');
+  document.getElementById('reTypeStream').onclick=()=>changeEditingLineType('stream');
+  document.getElementById('reAdd').onclick=enableRoadVertexAdd;
+}
+function changeEditingLineType(kind){
+  const f=roadFeatures.find(r=>r.id===editingRoadId); if(!f) return;
+  f.kind=kind;
+  if(roadLayers[f.id]) roadLayers[f.id].setStyle(roadStyle(kind));
+  renderRoadEditBanner(f);
+  showToast('Changed to '+lineLabel(kind));
+}
+function rebuildRoadEditMarkers(){
+  roadEditMarkers.forEach(m=>map.removeLayer(m)); roadEditMarkers=[];
+  const f=roadFeatures.find(r=>r.id===editingRoadId); if(!f) return;
+  const vertexIcon=L.divIcon({className:'', html:'<div class="edit-vertex"></div>', iconSize:[14,14], iconAnchor:[7,7]});
+  roadEditMarkers = f.coords.map((c,idx)=>{
+    const m=L.marker(c,{icon:vertexIcon, draggable:true, zIndexOffset:1200}).addTo(map);
+    let pressTimer=null;
+    m.on('mousedown touchstart',()=>{ pressTimer=setTimeout(()=>removeEditingRoadVertex(idx),650); });
+    m.on('mouseup mouseout touchend',()=>{ if(pressTimer) clearTimeout(pressTimer); });
+    m.on('drag',()=>{
+      if(pressTimer) clearTimeout(pressTimer);
+      const ll=m.getLatLng();
+      if(hasActiveBoundary() && !isInsideBoundary(ll.lat,ll.lng)){ warnOutOfBoundary(); return; }
+      f.coords[idx]=[ll.lat,ll.lng]; if(roadLayers[f.id]) roadLayers[f.id].setLatLngs(f.coords);
+    });
+    m.on('dragend',()=>{
+      const ll=m.getLatLng();
+      if(hasActiveBoundary() && !isInsideBoundary(ll.lat,ll.lng)){
+        m.setLatLng(f.coords[idx]); warnOutOfBoundary();
+      } else { f.coords[idx]=[ll.lat,ll.lng]; }
+      if(roadLayers[f.id]) roadLayers[f.id].setLatLngs(f.coords);
+    });
+    return m;
+  });
+}
+function removeEditingRoadVertex(idx){
+  const f=roadFeatures.find(r=>r.id===editingRoadId); if(!f) return;
+  if(f.coords.length<=2){ showToast('A line needs at least 2 points'); return; }
+  f.coords.splice(idx,1);
+  if(roadLayers[f.id]) roadLayers[f.id].setLatLngs(f.coords);
+  rebuildRoadEditMarkers();
+  showToast('Point removed');
+}
+function enableRoadVertexAdd(){
+  showToast('Tap the line area to add a point');
+  const once=(e)=>{
+    map.off('click', once);
+    const f=roadFeatures.find(r=>r.id===editingRoadId); if(!f) return;
+    if(hasActiveBoundary() && !isInsideBoundary(e.latlng.lat,e.latlng.lng)){ warnOutOfBoundary(); return; }
+    const insertAt = nearestSegmentIndex(f.coords, [e.latlng.lat,e.latlng.lng]) + 1;
+    f.coords.splice(insertAt,0,[e.latlng.lat,e.latlng.lng]);
+    if(roadLayers[f.id]) roadLayers[f.id].setLatLngs(f.coords);
+    rebuildRoadEditMarkers();
+    showToast('Point added');
+  };
+  map.on('click', once);
+}
+function nearestSegmentIndex(coords, latlng){
+  if(coords.length<2) return 0;
+  const p=map.latLngToLayerPoint(latlng); let best=0, bestDist=Infinity;
+  for(let i=0;i<coords.length-1;i++){
+    const a=map.latLngToLayerPoint(coords[i]), b=map.latLngToLayerPoint(coords[i+1]);
+    const d=pointSegmentDistance(p,a,b);
+    if(d<bestDist){ bestDist=d; best=i; }
+  }
+  return best;
+}
+function pointSegmentDistance(p,a,b){
+  const dx=b.x-a.x, dy=b.y-a.y;
+  if(dx===0 && dy===0) return Math.hypot(p.x-a.x,p.y-a.y);
+  let t=((p.x-a.x)*dx+(p.y-a.y)*dy)/(dx*dx+dy*dy); t=Math.max(0,Math.min(1,t));
+  const x=a.x+t*dx, y=a.y+t*dy; return Math.hypot(p.x-x,p.y-y);
+}
+function saveRoadEdit(){
+  const f=roadFeatures.find(r=>r.id===editingRoadId);
+  if(f && !boundaryContainsLine(f.coords)){ warnOutOfBoundary(); return; }
+  const label=lineLabel(f && f.kind);
+  saveBlock(); roadEditOriginalCoords=null; cancelRoadEdit(false); showToast(label+' saved');
+}
+function cancelRoadEdit(redraw){
+  if(redraw && editingRoadId && roadEditOriginalCoords){
+    const f=roadFeatures.find(r=>r.id===editingRoadId);
+    if(f){ f.coords=roadEditOriginalCoords.map(c=>[c[0],c[1]]); f.kind=roadEditOriginalKind||f.kind; if(roadLayers[f.id]){ roadLayers[f.id].setLatLngs(f.coords); roadLayers[f.id].setStyle(roadStyle(f.kind)); } }
+  }
+  roadEditMarkers.forEach(m=>map.removeLayer(m)); roadEditMarkers=[]; editingRoadId=null; roadEditOriginalCoords=null; roadEditOriginalKind=null;
+  if(mode==='road-edit') mode=null;
+  if(redraw) renderAllRoads();
+  hideBanner();
+}
 
 /* ---- Drawing banner helper ---- */
 function showBanner(label, actionsHtml, extraHtml){
@@ -582,6 +827,7 @@ function setRoadWalkKind(k){
   document.getElementById('rwChipStream').classList.toggle('selected', k==='stream');
 }
 function saveRoadWalk(){
+  if(!boundaryContainsLine(roadWalkCoords)){ warnOutOfBoundary(); return; }
   const feature={id:Date.now()+'-'+Math.random().toString(36).slice(2,6), kind:roadWalkKind, coords:roadWalkCoords, t:new Date().toISOString()};
   roadFeatures.push(feature); renderRoadFeature(feature);
   if(roadWalkLine){ map.removeLayer(roadWalkLine); roadWalkLine=null; }
@@ -595,7 +841,7 @@ function startRoadDraw(){
   if(roadDraftLine){ map.removeLayer(roadDraftLine); roadDraftLine=null; }
   followMode=false; document.getElementById('followBtn').classList.remove('active');
   renderRoadBanner();
-  roadClickHandlerRef=(e)=>{ roadDraftCoords.push([e.latlng.lat,e.latlng.lng]); redrawRoadDraft(); };
+  roadClickHandlerRef=(e)=>{ if(!isInsideBoundary(e.latlng.lat,e.latlng.lng)){ warnOutOfBoundary(); return; } roadDraftCoords.push([e.latlng.lat,e.latlng.lng]); redrawRoadDraft(); };
   map.on('click', roadClickHandlerRef);
 }
 function renderRoadBanner(){
@@ -621,6 +867,7 @@ function redrawRoadDraft(){
 }
 function finishRoadLine(){
   if(roadDraftCoords.length<2){ showToast('Add at least 2 points first'); return; }
+  if(!boundaryContainsLine(roadDraftCoords)){ warnOutOfBoundary(); return; }
   const feature={id:Date.now()+'-'+Math.random().toString(36).slice(2,6), kind:roadSelectedKind, coords:roadDraftCoords, t:new Date().toISOString()};
   roadFeatures.push(feature); renderRoadFeature(feature);
   if(roadDraftLine){ map.removeLayer(roadDraftLine); roadDraftLine=null; }
@@ -669,6 +916,7 @@ function onPos(pos){
     else trailLine.setLatLngs(trailCoords);
   }
   if(roadWalkRecording){
+    if(!isInsideBoundary(lat,lng)){ warnOutOfBoundary(); return; }
     const lastRw = roadWalkCoords[roadWalkCoords.length-1];
     if(!lastRw || map.distance(lastRw, latlng) > 1.5){
       roadWalkCoords.push(latlng);
@@ -704,13 +952,19 @@ function renderSymbolGrid(){
 renderSymbolGrid();
 
 /* ================= Add / render point markers ================= */
+function makeBuildingIcon(sym, number){
+  const safeNum = escapeXml(number||'');
+  const cls = safeNum.length>4 ? 'num outside' : 'num';
+  const label = safeNum ? `<span class="${cls}">${safeNum}</span>` : '';
+  return L.divIcon({className:'', html:`<div class="hlb-symbol"><img src="${symbolToDataUrl(sym,44,'#eae6d9')}" alt="">${label}</div>`, iconSize:[34,40], iconAnchor:[17,17]});
+}
 function addMarkerForPoint(pt){
   const sym = SYMBOLS.find(s=>s.id===pt.type)||SYMBOLS[0];
-  const icon = L.icon({iconUrl: symbolToDataUrl(sym,44,'#eae6d9'), iconSize:[28,28], iconAnchor:[14,14]});
-  const m = L.marker([pt.lat,pt.lng], {icon, draggable:true}).addTo(map);
-  m.bindPopup(`<div class="popup-num">${pt.number}</div><div class="popup-meta">${sym.label}${pt.note?(' · '+pt.note):''}${pt.adjusted?' · moved from GPS point':''}</div><button class="popup-del" data-id="${pt.id}">Delete point</button>`);
+  const m = L.marker([pt.lat,pt.lng], {icon:makeBuildingIcon(sym, pt.number), draggable:true}).addTo(map);
+  m.bindPopup(`<div class="popup-num">${pt.number||'(no number)'}</div><div class="popup-meta">${sym.label}${pt.note?(' · '+pt.note):''}${pt.adjusted?' · moved from GPS point':''}</div><button class="popup-del" data-id="${pt.id}">Delete point</button>`);
   m.on('dragend', (e)=>{
     const ll = e.target.getLatLng();
+    if(!isInsideBoundary(ll.lat,ll.lng)){ warnOutOfBoundary(); e.target.setLatLng([pt.lat,pt.lng]); return; }
     pt.lat = ll.lat; pt.lng = ll.lng; pt.adjusted = true;
     refreshInsideFlags(); saveBlock();
     showToast('Marker position adjusted');
@@ -730,17 +984,48 @@ function addMarkerForPoint(pt){
 document.getElementById('markHere').onclick=()=>{
   if(!blockId){ showToast('Enter a Block ID first'); return; }
   if(!currentPos){ showToast('Waiting for GPS fix…'); return; }
-  document.getElementById('markGpsReadout').textContent = `${currentPos.lat.toFixed(6)}, ${currentPos.lng.toFixed(6)}  ·  ±${currentPos.acc.toFixed(1)}m`;
+  if(!isInsideBoundary(currentPos.lat,currentPos.lng)){
+    warnOutOfBoundary();
+    startPlaceByPanning();
+    return;
+  }
+  openMarkSheet({lat:currentPos.lat, lng:currentPos.lng, acc:currentPos.acc, source:'GPS'});
+};
+function openMarkSheet(latlng){
+  pendingMarkLatLng=latlng;
+  document.getElementById('markGpsReadout').textContent = `${latlng.source||'Selected'}: ${latlng.lat.toFixed(6)}, ${latlng.lng.toFixed(6)}${latlng.acc?('  ·  ±'+latlng.acc.toFixed(1)+'m'):''}`;
   document.getElementById('buildingNumber').value=''; document.getElementById('buildingNote').value='';
   document.getElementById('markOverlay').classList.add('open');
-};
-document.getElementById('cancelMark').onclick=()=>document.getElementById('markOverlay').classList.remove('open');
+}
+function startPlaceByPanning(){
+  mode='place-building'; followMode=false; document.getElementById('followBtn').classList.remove('active');
+  document.getElementById('panCrosshair').style.display='block';
+  document.body.classList.add('pan-mode');
+  showBanner('Place by panning — move map until crosshair is inside boundary.', `<button class="primary" id="usePanLocation">Use This Location</button><button class="danger" id="cancelPanLocation">Cancel</button>`);
+  document.getElementById('usePanLocation').onclick=()=>{
+    const c=map.getCenter();
+    if(!isInsideBoundary(c.lat,c.lng)){ warnOutOfBoundary(); return; }
+    endPlaceByPanning(false);
+    openMarkSheet({lat:c.lat,lng:c.lng,source:'Placed by panning'});
+  };
+  document.getElementById('cancelPanLocation').onclick=()=>endPlaceByPanning(true);
+}
+function endPlaceByPanning(showMsg){
+  if(mode==='place-building') mode=null;
+  document.getElementById('panCrosshair').style.display='none';
+  document.body.classList.remove('pan-mode');
+  hideBanner();
+  if(showMsg) showToast('Placement cancelled');
+}
+document.getElementById('cancelMark').onclick=()=>{ pendingMarkLatLng=null; document.getElementById('markOverlay').classList.remove('open'); };
 document.getElementById('saveMark').onclick=()=>{
+  if(!pendingMarkLatLng){ showToast('Select a location first'); return; }
+  if(!isInsideBoundary(pendingMarkLatLng.lat,pendingMarkLatLng.lng)){ warnOutOfBoundary(); return; }
   const number=document.getElementById('buildingNumber').value.trim();
-  if(!number){ showToast('Enter a building number'); return; }
   const pt = {id:Date.now()+'-'+Math.random().toString(36).slice(2,7), type:selectedSymbol, number,
-    note:document.getElementById('buildingNote').value.trim(), lat:currentPos.lat, lng:currentPos.lng, acc:currentPos.acc, t:new Date().toISOString()};
+    note:document.getElementById('buildingNote').value.trim(), lat:pendingMarkLatLng.lat, lng:pendingMarkLatLng.lng, acc:pendingMarkLatLng.acc||'', t:new Date().toISOString(), placedBy:pendingMarkLatLng.source||'GPS'};
   points.push(pt); addMarkerForPoint(pt); refreshInsideFlags(); saveBlock(); updateGpsCount();
+  pendingMarkLatLng=null;
   document.getElementById('markOverlay').classList.remove('open');
   showToast('Point saved');
 };
@@ -753,10 +1038,10 @@ function renderList(){
   document.getElementById('listSub').textContent = points.length+' point'+(points.length!==1?'s':'')+' in this block';
   if(points.length===0){ container.innerHTML='<div class="empty-state">No points yet.<br>Walk to a building and tap "Mark Building Here".</div>'; return; }
   container.innerHTML='';
-  [...points].sort((a,b)=>a.number.localeCompare(b.number,undefined,{numeric:true})).forEach(pt=>{
+  [...points].sort((a,b)=>(a.number||'').localeCompare(b.number||'',undefined,{numeric:true})).forEach(pt=>{
     const sym=SYMBOLS.find(s=>s.id===pt.type)||SYMBOLS[0];
     const row=document.createElement('div'); row.className='point-row';
-    row.innerHTML=`<canvas width="48" height="48"></canvas><div class="pinfo"><div class="pnum">${pt.number}</div><div class="pmeta">${sym.label} &middot; ${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}${pt.adjusted?' &middot; moved':''}</div></div><button class="pdel">&times;</button>`;
+    row.innerHTML=`<canvas width="48" height="48"></canvas><div class="pinfo"><div class="pnum">${pt.number||'(no number)'}</div><div class="pmeta">${sym.label} &middot; ${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)}${pt.adjusted?' &middot; moved':''}</div></div><button class="pdel">&times;</button>`;
     sym.draw(row.querySelector('canvas').getContext('2d'),24,24,20,sym.hatch,'#eae6d9');
     row.querySelector('.pdel').onclick=()=>{
       points=points.filter(p=>p.id!==pt.id);
@@ -858,11 +1143,26 @@ function buildPrintView(){
     const pts = f.m.map(m=>{ const p=toPx(m); return `${p.x.toFixed(2)},${p.y.toFixed(2)}`; }).join(' ');
     svgBody += `<polyline points="${pts}" fill="none" stroke="#000" stroke-width="${roadWidth[f.kind]||0.5}" ${roadDash[f.kind]?`stroke-dasharray="${roadDash[f.kind]}"`:''}/>`;
   });
-  // building symbols
-  pointsM.forEach(p=>{
-    const s = toPx(p.m);
-    svgBody += svgSymbol(p.type, s.x, s.y, 7);
-    svgBody += `<text x="${s.x.toFixed(2)}" y="${(s.y+11).toFixed(2)}" font-size="3.2" font-family="monospace" text-anchor="middle">${escapeXml(p.number)}</text>`;
+  // building symbols — one uniform size, computed so the closest two buildings' squares
+  // never overlap, without shifting any symbol away from its true coordinate
+  const screenPts = pointsM.map(p=>toPx(p.m));
+  // Symbol size is now grounded in real-world scale: each box represents a fixed
+  // physical footprint (in meters), converted using the exact same meters-per-mm
+  // as the printed scale bar — so the size is always true to scale, not a guess.
+  const FOOTPRINT_METERS = 4; // adjust this single number if boxes look too big/small in practice
+  const symbolSize = Math.max(1.2, Math.min(10, (FOOTPRINT_METERS * 0.9) / mPerMm));
+  pointsM.forEach((p,idx)=>{
+    const s = screenPts[idx];
+    svgBody += svgSymbol(p.type, s.x, s.y, symbolSize);
+    if(p.number){
+      const tx = escapeXml(p.number);
+      const fitsInside = tx.length<=4 && symbolSize>=3.4;
+      const insideFont = Math.max(1.4, symbolSize*0.32);
+      const belowFont = Math.max(1.8, symbolSize*0.4);
+      svgBody += fitsInside
+        ? `<text x="${s.x.toFixed(2)}" y="${(s.y+insideFont*0.45).toFixed(2)}" font-size="${insideFont.toFixed(2)}" font-family="monospace" text-anchor="middle">${tx}</text>`
+        : `<text x="${s.x.toFixed(2)}" y="${(s.y+symbolSize*0.75+belowFont).toFixed(2)}" font-size="${belowFont.toFixed(2)}" font-family="monospace" text-anchor="middle">${tx}</text>`;
+    }
   });
   // north arrow
   svgBody += `<g transform="translate(${drawW-14},14)">
@@ -1306,14 +1606,15 @@ function exitBoundaryEditMode(){
 }
 
 /* ================= Full backup export/import (for transferring between phones) ================= */
-document.getElementById('exportBackup').onclick=()=>{
-  const backup = {app:'hlb-field-mapper', exportedAt:new Date().toISOString(), blocks:{}};
-  for(let i=0;i<localStorage.length;i++){
-    const key = localStorage.key(i);
+document.getElementById('exportBackup').onclick=async ()=>{
+  const backup = {app:'hlb-field-mapper', storage:'indexeddb', exportedAt:new Date().toISOString(), blocks:{}};
+  const rows = await storageList('hlb:');
+  rows.forEach(row=>{
+    const key = row.key;
     if(key && key.startsWith('hlb:') && key!=='hlb:lastBlock'){
-      try{ backup.blocks[key.slice(4)] = JSON.parse(localStorage.getItem(key)); }catch(e){}
+      try{ backup.blocks[key.slice(4)] = JSON.parse(row.value); }catch(e){}
     }
-  }
+  });
   const count = Object.keys(backup.blocks).length;
   if(count===0){ showToast('No saved blocks to back up yet'); return; }
   download('hlb_backup_'+new Date().toISOString().slice(0,10)+'.json', JSON.stringify(backup), 'application/json');
