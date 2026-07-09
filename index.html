@@ -64,7 +64,8 @@
   .chip{font-family:var(--font-mono); font-size:9.5px; padding:6px 11px; border-radius:14px; border:1px solid var(--border); background:var(--bg); color:var(--text-dim);}
   .chip.selected{background:var(--teal); color:#0d1a16; border-color:var(--teal); font-weight:700;}
 
-  .pulse-dot{width:16px; height:16px; border-radius:50%; background:var(--teal); border:2px solid var(--paper); box-shadow:0 0 0 rgba(95,168,149,0.5); animation:radar 2s infinite;}
+  .pulse-dot{width:16px; height:16px; border-radius:50%; background:var(--teal); border:2px solid var(--paper); box-shadow:0 0 0 rgba(95,168,149,0.5); animation:radar 2s infinite; position:absolute; top:7px; left:7px;}
+  #headingCone{position:absolute; top:-2px; left:6px; width:0; height:0; border-left:9px solid transparent; border-right:9px solid transparent; border-bottom:17px solid rgba(95,168,149,0.65); transform-origin:50% 17px; display:none;}
   .hlb-symbol{position:relative; width:34px; height:34px; display:flex; align-items:center; justify-content:center;}
   .hlb-symbol img{width:28px; height:28px; display:block;}
   .hlb-symbol .num{position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); font-family:var(--font-mono); font-size:7px; font-weight:700; line-height:1; color:var(--amber); background:rgba(22,33,29,0.72); padding:1px 2px; border-radius:2px; max-width:24px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; pointer-events:none;}
@@ -119,7 +120,7 @@
 
   #printArea{display:none;}
   @media print{
-    @page{ size: A3 portrait; margin: 10mm; }
+    @page{ size: A3 landscape; margin: 10mm; }
     body *{ visibility:hidden; }
     #printArea, #printArea *{ visibility:visible; }
     #printArea{ display:block !important; position:absolute; top:0; left:0; width:100%; }
@@ -258,6 +259,7 @@ const SYMBOLS = [
   {id:'pucca_nonres', label:'Pucca · Non-residential',  draw:drawSquare,   hatch:true,  color:'#eae6d9'},
   {id:'kutcha_res',   label:'Kutcha · Residential',     draw:drawTriangle, hatch:false, color:'#eae6d9'},
   {id:'kutcha_nonres',label:'Kutcha · Non-residential', draw:drawTriangle, hatch:true,  color:'#eae6d9'},
+  {id:'multi_unit',   label:'Multi-unit (Apartments/Shops)', draw:drawGrid, hatch:false, color:'#eae6d9'},
   {id:'well',         label:'Well / Handpump',          draw:drawWell,     hatch:false, color:'#eae6d9'},
   {id:'landmark',     label:'Landmark (temple/school)', draw:drawLandmark, hatch:false, color:'#eae6d9'},
 ];
@@ -271,6 +273,15 @@ function drawTriangle(ctx,cx,cy,s,hatch,color){
   const h=s*0.9; ctx.strokeStyle=color; ctx.lineWidth=Math.max(1.4,s*0.07);
   ctx.beginPath(); ctx.moveTo(cx,cy-h/1.6); ctx.lineTo(cx+s/1.7,cy+h/2.2); ctx.lineTo(cx-s/1.7,cy+h/2.2); ctx.closePath(); ctx.stroke();
   if(hatch){ ctx.save(); ctx.clip(); ctx.beginPath(); for(let i=-s;i<=s;i+=s/4){ ctx.moveTo(cx-s+i,cy-h/1.6); ctx.lineTo(cx-s+i+h,cy+h/2.2);} ctx.strokeStyle=color; ctx.lineWidth=Math.max(0.9,s*0.04); ctx.stroke(); ctx.restore(); }
+}
+function drawGrid(ctx,cx,cy,s,hatch,color){
+  ctx.strokeStyle=color; ctx.lineWidth=Math.max(1.4,s*0.07);
+  ctx.strokeRect(cx-s/2,cy-s/2,s,s);
+  ctx.lineWidth=Math.max(0.9,s*0.045);
+  ctx.beginPath();
+  ctx.moveTo(cx,cy-s/2); ctx.lineTo(cx,cy+s/2);
+  ctx.moveTo(cx-s/2,cy); ctx.lineTo(cx+s/2,cy);
+  ctx.stroke();
 }
 function drawWell(ctx,cx,cy,s,hatch,color){
   ctx.strokeStyle=color; ctx.lineWidth=Math.max(1.4,s*0.08);
@@ -292,7 +303,7 @@ function symbolToDataUrl(sym, size, color){
 let blockId='', points=[], currentPos=null, selectedSymbol=SYMBOLS[0].id, followMode=true, usingSatellite=true;
 let map, liveMarker, accCircle, trailLine, trailCoords=[], pointMarkers={}, warningRings={};
 let boundary={points:[], closed:false, method:null}, boundaryLayer=null;
-let roadFeatures=[], roadLayers={};
+let roadFeatures=[], roadLayers={}, roadHitLayers={};
 let mode=null; // null | 'boundary-walk' | 'boundary-coords' | 'road-draw' | 'place-building' | 'road-edit'
 let pendingMarkLatLng=null, editingRoadId=null, roadEditMarkers=[], roadEditOriginalCoords=null, roadEditOriginalKind=null;
 let boundaryDraft=[], boundaryDraftLine=null, boundaryVertexMarkers=[], boundaryWalkTimer=null, boundaryClickHandler=null;
@@ -452,7 +463,7 @@ document.getElementById('trailToggleBtn').onclick = (e)=>{
 };
 
 /* live position icon */
-const liveIcon = L.divIcon({className:'', html:'<div class="pulse-dot"></div>', iconSize:[16,16], iconAnchor:[8,8]});
+const liveIcon = L.divIcon({className:'', html:'<div style="position:relative;width:30px;height:30px;"><div id="headingCone"></div><div class="pulse-dot"></div></div>', iconSize:[30,30], iconAnchor:[15,15]});
 
 /* ================= Storage ================= */
 async function loadBlock(id){
@@ -531,7 +542,10 @@ function refreshInsideFlags(){
 }
 
 /* ---- Road feature rendering ---- */
-function clearRoadLayers(){ Object.values(roadLayers).forEach(l=>map.removeLayer(l)); roadLayers={}; }
+function clearRoadLayers(){
+  Object.values(roadLayers).forEach(l=>map.removeLayer(l)); roadLayers={};
+  Object.values(roadHitLayers).forEach(l=>map.removeLayer(l)); roadHitLayers={};
+}
 function roadStyle(kind){
   if(kind==='walkway') return {color:'#f2f2f2', weight:1.5, dashArray:'4,4', opacity:0.9};
   if(kind==='stream') return {color:'#4fa8e8', weight:2.5, dashArray:'1,4', opacity:0.9};
@@ -541,6 +555,10 @@ function renderRoadFeature(f){
   const layer = L.polyline(f.coords, roadStyle(f.kind)).addTo(map);
   layer.on('click', ()=>openRoadPopup(f));
   roadLayers[f.id] = layer;
+  // invisible wide line underneath so thin walkways/streams are as easy to tap as thick roads
+  const hitLayer = L.polyline(f.coords, {color:'#000', weight:24, opacity:0.001}).addTo(map);
+  hitLayer.on('click', ()=>openRoadPopup(f));
+  roadHitLayers[f.id] = hitLayer;
 }
 function renderAllRoads(){ clearRoadLayers(); roadFeatures.forEach(renderRoadFeature); }
 function lineLabel(kind){ return kind==='walkway' ? 'Walkway' : (kind==='stream' ? 'Stream' : 'Road'); }
@@ -559,7 +577,8 @@ function deleteRoadFeature(id){
   const label=lineLabel(f && f.kind);
   if(!confirm('Delete this '+label.toLowerCase()+'?')) return;
   const layer=roadLayers[id]; if(layer) map.removeLayer(layer);
-  delete roadLayers[id]; roadFeatures=roadFeatures.filter(r=>r.id!==id); saveBlock(); showToast(label+' deleted');
+  const hitLayer=roadHitLayers[id]; if(hitLayer) map.removeLayer(hitLayer);
+  delete roadLayers[id]; delete roadHitLayers[id]; roadFeatures=roadFeatures.filter(r=>r.id!==id); saveBlock(); showToast(label+' deleted');
 }
 function startRoadEdit(id){
   finishRoadDrawMode(); cancelRoadEdit(false);
@@ -664,11 +683,11 @@ function saveRoadEdit(){
 function cancelRoadEdit(redraw){
   if(redraw && editingRoadId && roadEditOriginalCoords){
     const f=roadFeatures.find(r=>r.id===editingRoadId);
-    if(f){ f.coords=roadEditOriginalCoords.map(c=>[c[0],c[1]]); f.kind=roadEditOriginalKind||f.kind; if(roadLayers[f.id]){ roadLayers[f.id].setLatLngs(f.coords); roadLayers[f.id].setStyle(roadStyle(f.kind)); } }
+    if(f){ f.coords=roadEditOriginalCoords.map(c=>[c[0],c[1]]); f.kind=roadEditOriginalKind||f.kind; }
   }
   roadEditMarkers.forEach(m=>map.removeLayer(m)); roadEditMarkers=[]; editingRoadId=null; roadEditOriginalCoords=null; roadEditOriginalKind=null;
+  renderAllRoads();
   if(mode==='road-edit') mode=null;
-  if(redraw) renderAllRoads();
   hideBanner();
 }
 
@@ -891,6 +910,14 @@ function onGpsError(err){
   document.getElementById('gpsStatus').textContent = err.code===1 ? 'Permission denied' : 'Signal lost';
 }
 let firstFix = true;
+function updateHeadingCone(heading){
+  const el = liveMarker && liveMarker.getElement();
+  if(!el) return;
+  const cone = el.querySelector('#headingCone');
+  if(!cone) return;
+  if(heading===null){ cone.style.display='none'; }
+  else { cone.style.display='block'; cone.style.transform = 'rotate('+heading+'deg)'; }
+}
 function onPos(pos){
   const {latitude:lat, longitude:lng, accuracy:acc} = pos.coords;
   currentPos = {lat,lng,acc};
@@ -903,8 +930,10 @@ function onPos(pos){
   document.getElementById('gpsLng').textContent=lng.toFixed(6);
 
   const latlng=[lat,lng];
+  const heading = (typeof pos.coords.heading === 'number' && !isNaN(pos.coords.heading)) ? pos.coords.heading : null;
   if(!liveMarker){ liveMarker=L.marker(latlng,{icon:liveIcon,zIndexOffset:1000}).addTo(map); }
   else liveMarker.setLatLng(latlng);
+  updateHeadingCone(heading);
   if(!accCircle){ accCircle=L.circle(latlng,{radius:acc, color:'#5fa895', weight:1, fillOpacity:0.08}).addTo(map); }
   else { accCircle.setLatLng(latlng); accCircle.setRadius(acc); }
 
@@ -962,12 +991,19 @@ function addMarkerForPoint(pt){
   const sym = SYMBOLS.find(s=>s.id===pt.type)||SYMBOLS[0];
   const m = L.marker([pt.lat,pt.lng], {icon:makeBuildingIcon(sym, pt.number), draggable:true}).addTo(map);
   m.bindPopup(`<div class="popup-num">${pt.number||'(no number)'}</div><div class="popup-meta">${sym.label}${pt.note?(' · '+pt.note):''}${pt.adjusted?' · moved from GPS point':''}</div><button class="popup-del" data-id="${pt.id}">Delete point</button>`);
+  m.on('dragstart', ()=>{ m._preDragPos = {lat:pt.lat, lng:pt.lng, adjusted:pt.adjusted}; });
   m.on('dragend', (e)=>{
     const ll = e.target.getLatLng();
     if(!isInsideBoundary(ll.lat,ll.lng)){ warnOutOfBoundary(); e.target.setLatLng([pt.lat,pt.lng]); return; }
+    const prev = m._preDragPos || {lat:pt.lat, lng:pt.lng, adjusted:pt.adjusted};
     pt.lat = ll.lat; pt.lng = ll.lng; pt.adjusted = true;
     refreshInsideFlags(); saveBlock();
-    showToast('Marker position adjusted');
+    showUndoToast('Marker moved', ()=>{
+      pt.lat = prev.lat; pt.lng = prev.lng; pt.adjusted = prev.adjusted;
+      m.setLatLng([pt.lat, pt.lng]);
+      refreshInsideFlags(); saveBlock();
+      showToast('Move undone');
+    });
   });
   m.on('popupopen', (e)=>{
     e.popup.getElement().querySelector('.popup-del').onclick = ()=>{
@@ -1097,7 +1133,7 @@ document.getElementById('exportPrint').onclick = ()=>{
 window.addEventListener('afterprint', ()=>{ document.getElementById('printArea').style.display='none'; });
 
 function buildPrintView(){
-  const PAGE_W = 297, PAGE_H = 420; // A3 portrait, mm
+  const PAGE_W = 420, PAGE_H = 297; // A3 landscape, mm
   const MARGIN = 10;
   const HEADER_H = 26, LEGEND_H = 46;
   const drawW = PAGE_W - MARGIN*2;
@@ -1222,6 +1258,7 @@ function svgSymbol(type, cx, cy, s){
   if(type==='pucca_nonres') return `<rect x="${cx-s/2}" y="${cy-s/2}" width="${s}" height="${s}" fill="none" stroke="${black}" stroke-width="0.5"/>` + hatchLines(cx-s/2,cy-s/2,s,s);
   if(type==='kutcha_res') return `<polygon points="${cx},${cy-s*0.55} ${cx+s*0.55},${cy+s*0.4} ${cx-s*0.55},${cy+s*0.4}" fill="none" stroke="${black}" stroke-width="0.5"/>`;
   if(type==='kutcha_nonres') return `<polygon points="${cx},${cy-s*0.55} ${cx+s*0.55},${cy+s*0.4} ${cx-s*0.55},${cy+s*0.4}" fill="none" stroke="${black}" stroke-width="0.5"/>` + hatchLines(cx-s/2,cy-s*0.2,s,s*0.5);
+  if(type==='multi_unit') return `<rect x="${cx-s/2}" y="${cy-s/2}" width="${s}" height="${s}" fill="none" stroke="${black}" stroke-width="0.5"/><line x1="${cx}" y1="${cy-s/2}" x2="${cx}" y2="${cy+s/2}" stroke="${black}" stroke-width="0.35"/><line x1="${cx-s/2}" y1="${cy}" x2="${cx+s/2}" y2="${cy}" stroke="${black}" stroke-width="0.35"/>`;
   if(type==='well') return `<circle cx="${cx}" cy="${cy}" r="${s/2.3}" fill="none" stroke="${black}" stroke-width="0.5"/><circle cx="${cx}" cy="${cy}" r="0.6" fill="${black}"/>`;
   if(type==='landmark') return `<polygon points="${cx},${cy-s/1.8} ${cx+s/1.8},${cy} ${cx},${cy+s/1.8} ${cx-s/1.8},${cy}" fill="none" stroke="${black}" stroke-width="0.5"/>`;
   return '';
@@ -1639,7 +1676,27 @@ document.getElementById('importBackupInput').addEventListener('change', async (e
 
 /* ================= Toast ================= */
 let toastTimer;
-function showToast(msg){ const t=document.getElementById('toast'); t.textContent=msg; t.classList.add('show'); clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.remove('show'),2000); }
+function showToast(msg){
+  const t=document.getElementById('toast');
+  t.style.pointerEvents='none';
+  t.textContent=msg; t.classList.add('show');
+  clearTimeout(toastTimer); clearTimeout(undoToastTimer);
+  toastTimer=setTimeout(()=>t.classList.remove('show'),2000);
+}
+let undoToastTimer;
+function showUndoToast(msg, onUndo){
+  const t=document.getElementById('toast');
+  t.innerHTML = escapeXml(msg) +
+    ' <button id="toastSaveBtn" style="margin-left:10px; background:var(--amber); color:#1a1408; border:none; padding:4px 12px; border-radius:12px; font-family:var(--font-mono); font-size:10.5px; font-weight:700;">SAVE</button>' +
+    ' <button id="toastUndoBtn" style="margin-left:6px; background:#0d1a16; color:var(--teal); border:none; padding:4px 12px; border-radius:12px; font-family:var(--font-mono); font-size:10.5px; font-weight:700;">UNDO</button>';
+  t.style.pointerEvents='auto';
+  t.classList.add('show');
+  clearTimeout(toastTimer); clearTimeout(undoToastTimer);
+  const cleanup=()=>{ t.classList.remove('show'); t.style.pointerEvents='none'; };
+  document.getElementById('toastSaveBtn').onclick=(e)=>{ e.stopPropagation(); cleanup(); };
+  document.getElementById('toastUndoBtn').onclick=(e)=>{ e.stopPropagation(); cleanup(); onUndo(); };
+  // stays on screen until Save or Undo is tapped — no auto-dismiss timer
+}
 
 /* ================= Block handling ================= */
 const blockInput=document.getElementById('blockId');
