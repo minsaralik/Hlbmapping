@@ -1185,20 +1185,52 @@ function buildPrintView(){
   // Symbol size is now grounded in real-world scale: each box represents a fixed
   // physical footprint (in meters), converted using the exact same meters-per-mm
   // as the printed scale bar — so the size is always true to scale, not a guess.
-  const FOOTPRINT_METERS = 4; // adjust this single number if boxes look too big/small in practice
-  const symbolSize = Math.max(1.2, Math.min(10, (FOOTPRINT_METERS * 0.9) / mPerMm));
+  const FOOTPRINT_METERS = 2.5; // adjust this single number if boxes look too big/small in practice
+  const symbolSize = Math.max(1, Math.min(8, (FOOTPRINT_METERS * 0.75) / mPerMm));
+  pointsM.forEach((p,idx)=>{ svgBody += svgSymbol(p.type, screenPts[idx].x, screenPts[idx].y, symbolSize); });
+
+  // ---- Label placement: keep every symbol at its true position/size, but if a
+  // label would collide with a neighboring symbol or label, nudge just the TEXT
+  // to the nearest open spot and draw a thin leader line back to the real point.
+  function boxesOverlap(a,b){ return !(a.x2<b.x1 || a.x1>b.x2 || a.y2<b.y1 || a.y1>b.y2); }
+  const symbolBoxes = screenPts.map(s=>({x1:s.x-symbolSize/2, y1:s.y-symbolSize/2, x2:s.x+symbolSize/2, y2:s.y+symbolSize/2}));
+  const placedLabelBoxes = [];
+  function collides(box, skipIdx){
+    for(let i=0;i<symbolBoxes.length;i++){ if(i!==skipIdx && boxesOverlap(box,symbolBoxes[i])) return true; }
+    for(const lb of placedLabelBoxes){ if(boxesOverlap(box,lb)) return true; }
+    return false;
+  }
   pointsM.forEach((p,idx)=>{
+    if(!p.number) return;
     const s = screenPts[idx];
-    svgBody += svgSymbol(p.type, s.x, s.y, symbolSize);
-    if(p.number){
-      const tx = escapeXml(p.number);
-      const fitsInside = tx.length<=4 && symbolSize>=3.4;
+    const tx = escapeXml(p.number);
+    const fitsInside = tx.length<=4 && symbolSize>=3.4;
+    if(fitsInside){
       const insideFont = Math.max(1.4, symbolSize*0.32);
-      const belowFont = Math.max(1.8, symbolSize*0.4);
-      svgBody += fitsInside
-        ? `<text x="${s.x.toFixed(2)}" y="${(s.y+insideFont*0.45).toFixed(2)}" font-size="${insideFont.toFixed(2)}" font-family="monospace" text-anchor="middle">${tx}</text>`
-        : `<text x="${s.x.toFixed(2)}" y="${(s.y+symbolSize*0.75+belowFont).toFixed(2)}" font-size="${belowFont.toFixed(2)}" font-family="monospace" text-anchor="middle">${tx}</text>`;
+      svgBody += `<text x="${s.x.toFixed(2)}" y="${(s.y+insideFont*0.45).toFixed(2)}" font-size="${insideFont.toFixed(2)}" font-family="monospace" text-anchor="middle">${tx}</text>`;
+      return;
     }
+    const fontSize = Math.max(1.8, symbolSize*0.4);
+    const labelW = tx.length*fontSize*0.62, labelH = fontSize*1.15;
+    const gap = symbolSize*0.75 + 0.9;
+    // candidate positions: default straight below first, then a ring of alternatives
+    const candidates = [{dx:0, dy:gap}];
+    const ringDists = [gap, gap+2.2, gap+4.4, gap+7];
+    const angles = [90,45,135,0,180,270,315,225,60,120,300,240];
+    ringDists.forEach(r=>{ angles.forEach(a=>{ const rad=a*Math.PI/180; candidates.push({dx:r*Math.cos(rad), dy:r*Math.sin(rad)}); }); });
+    let chosen=null;
+    for(const c of candidates){
+      const cx=s.x+c.dx, cy=s.y+c.dy;
+      const box={x1:cx-labelW/2, y1:cy-labelH/2, x2:cx+labelW/2, y2:cy+labelH/2};
+      if(!collides(box, idx)){ chosen={cx,cy,box}; break; }
+    }
+    if(!chosen){ const cx=s.x, cy=s.y+gap; chosen={cx,cy,box:{x1:cx-labelW/2,y1:cy-labelH/2,x2:cx+labelW/2,y2:cy+labelH/2}}; }
+    placedLabelBoxes.push(chosen.box);
+    const isDefault = Math.abs(chosen.cx-s.x)<0.01 && Math.abs(chosen.cy-(s.y+gap))<0.01;
+    if(!isDefault){
+      svgBody += `<line x1="${s.x.toFixed(2)}" y1="${s.y.toFixed(2)}" x2="${chosen.cx.toFixed(2)}" y2="${chosen.cy.toFixed(2)}" stroke="#000" stroke-width="0.15"/>`;
+    }
+    svgBody += `<text x="${chosen.cx.toFixed(2)}" y="${(chosen.cy+fontSize*0.35).toFixed(2)}" font-size="${fontSize.toFixed(2)}" font-family="monospace" text-anchor="middle">${tx}</text>`;
   });
   // north arrow
   svgBody += `<g transform="translate(${drawW-14},14)">
